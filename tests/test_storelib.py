@@ -116,3 +116,31 @@ def test_install_and_remove_cycle(tmp_path, monkeypatch):
     removed = store.remove("note_detect")
     assert removed["ok"] is True
     assert not (plugin_root / "note_detect").exists()
+
+
+def test_plugin_root_may_live_outside_config(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    plugin_root = tmp_path / "user-plugins"
+    plugin_dir = tmp_path / "plugin_store"
+    config_dir.mkdir()
+    plugin_dir.mkdir()
+    (plugin_dir / "registry.yaml").write_text("schema: 1\nplugins: []\n", encoding="utf-8")
+    monkeypatch.setenv("FEEDBACK_PLUGINS_DIR", str(plugin_root))
+
+    class Log:
+        def info(self, *args, **kwargs): pass
+        def error(self, *args, **kwargs): pass
+
+    store = storelib.PluginStore(config_dir=config_dir, plugin_dir=plugin_dir, log=Log())
+    assert store.plugin_root == plugin_root.resolve()
+    assert store.state_dir == (config_dir / "plugin_store").resolve()
+
+
+def test_registry_url_falls_back_to_manifest_homepage(tmp_path):
+    (tmp_path / "plugin.json").write_text(
+        json.dumps({"homepage": "https://github.com/irnutsmurt/feedBack-plugin-store"}),
+        encoding="utf-8",
+    )
+    assert storelib.discover_registry_url(tmp_path) == (
+        "https://raw.githubusercontent.com/irnutsmurt/feedBack-plugin-store/main/registry.yaml"
+    )

@@ -29,11 +29,12 @@ services:
     volumes:
       - "/volume2/General Storage/feedback/dlc:/dlc"
       - "/volume1/docker/feedback:/config"
+      - "/volume1/docker/feedback/user-plugins:/user-plugins"
 
     environment:
       DLC_DIR: /dlc
       CONFIG_DIR: /config
-      FEEDBACK_PLUGINS_DIR: /config/user-plugins
+      FEEDBACK_PLUGINS_DIR: /user-plugins
 
     restart: unless-stopped
 ```

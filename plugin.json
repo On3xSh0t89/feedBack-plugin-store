@@ -1,11 +1,11 @@
 {
   "id": "plugin_store",
   "name": "Plugin Store",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browse, install, update, and remove curated feedBack plugins.",
   "type": "tool",
   "category": "tools",
-  "icon": "🧩",
+  "icon": "assets/thumb.svg",
   "nav": {
     "label": "Plugin Store",
     "screen": "plugin-plugin_store"

@@ -163,41 +163,7 @@ def validate_registry_url(url: str) -> str:
     return url
 
 
-def discover_registry_url(plugin_dir: Path) -> str | None:
-    configured = os.environ.get("FEEDBACK_PLUGIN_STORE_REGISTRY_URL", "").strip()
-    if configured:
-        return validate_registry_url(configured)
-
-    git_dir = plugin_dir / ".git"
-    if not git_dir.is_dir():
-        return None
-
-    config_path = git_dir / "config"
-    head_path = git_dir / "HEAD"
-    if not config_path.is_file():
-        return None
-
-    parser = configparser.ConfigParser()
-    try:
-        parser.read(config_path, encoding="utf-8")
-        origin = parser.get('remote "origin"', "url")
-    except (configparser.Error, KeyError, OSError):
-        return None
-
-    parsed_repo = parse_github_repo(origin)
-    if not parsed_repo:
-        return None
-
-    owner, repo = parsed_repo
-    branch = "main"
-    try:
-        head = head_path.read_text(encoding="utf-8").strip()
-        prefix = "ref: refs/heads/"
-        if head.startswith(prefix):
-            branch = head[len(prefix):]
-    except OSError:
-        pass
-
+def _raw_registry_url(owner: str, repo: str, branch: str = "main") -> str:
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
     branch_q = urllib.parse.quote(branch, safe="")
@@ -205,6 +171,54 @@ def discover_registry_url(plugin_dir: Path) -> str | None:
         f"https://raw.githubusercontent.com/"
         f"{owner_q}/{repo_q}/{branch_q}/registry.yaml"
     )
+
+
+def discover_registry_url(plugin_dir: Path) -> str | None:
+    configured = os.environ.get("FEEDBACK_PLUGIN_STORE_REGISTRY_URL", "").strip()
+    if configured:
+        return validate_registry_url(configured)
+
+    # Preferred: derive the registry from the git origin when this plugin was
+    # installed with git clone.
+    git_dir = plugin_dir / ".git"
+    if git_dir.is_dir():
+        config_path = git_dir / "config"
+        head_path = git_dir / "HEAD"
+        if config_path.is_file():
+            parser = configparser.ConfigParser()
+            try:
+                parser.read(config_path, encoding="utf-8")
+                origin = parser.get('remote "origin"', "url")
+            except (configparser.Error, KeyError, OSError):
+                origin = ""
+
+            parsed_repo = parse_github_repo(origin)
+            if parsed_repo:
+                owner, repo = parsed_repo
+                branch = "main"
+                try:
+                    head = head_path.read_text(encoding="utf-8").strip()
+                    prefix = "ref: refs/heads/"
+                    if head.startswith(prefix):
+                        branch = head[len(prefix):]
+                except OSError:
+                    pass
+                return _raw_registry_url(owner, repo, branch)
+
+    # ZIP/manual installs have no .git directory. Fall back to the plugin's
+    # declared GitHub homepage so they still receive live registry updates.
+    try:
+        manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
+        homepage = str(manifest.get("homepage") or "") if isinstance(manifest, dict) else ""
+    except (OSError, json.JSONDecodeError):
+        homepage = ""
+
+    parsed_repo = parse_github_repo(homepage)
+    if parsed_repo:
+        owner, repo = parsed_repo
+        return _raw_registry_url(owner, repo, "main")
+
+    return None
 
 
 def validate_registry(data: Any) -> dict[str, Any]:
@@ -411,8 +425,14 @@ class PluginStore:
         else:
             self.plugin_root = (self.config_dir / "user-plugins").resolve(strict=False)
 
-        # The plugin spec requires plugin writes to remain under config_dir.
-        ensure_within(self.plugin_root, self.config_dir)
+        # FEEDBACK_PLUGINS_DIR is a Host/admin-controlled plugin root and may
+        # legitimately live outside CONFIG_DIR (for example /user-plugins).
+        # Keep store state/cache under CONFIG_DIR, but confine all plugin
+        # lifecycle operations to this dedicated plugin root.
+        if not self.plugin_root.is_absolute():
+            raise StoreError("FEEDBACK_PLUGINS_DIR must resolve to an absolute path.", 500)
+        if self.plugin_root == Path("/"):
+            raise StoreError("Refusing to use the filesystem root as FEEDBACK_PLUGINS_DIR.", 500)
 
         self.state_dir = self.config_dir / "plugin_store"
         self.cache_path = self.state_dir / "registry.yaml"

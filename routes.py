@@ -7,6 +7,10 @@ plugin specification. All setup happens inside setup().
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import signal
+import threading
+import uuid
 
 from fastapi import FastAPI, Header, HTTPException, Query
 
@@ -44,6 +48,41 @@ def setup(app: FastAPI, context: dict) -> None:
         # preflight instead of allowing a plain HTML form to mutate plugin state.
         if value != "1":
             raise HTTPException(status_code=403, detail="Missing Plugin Store request header.")
+
+    # Unique for this Python process. The frontend uses this to distinguish the
+    # restarted feedBack instance from the old one without relying on a visible
+    # outage window.
+    instance_id = uuid.uuid4().hex
+
+    @app.get(f"{API_PREFIX}/instance")
+    def get_instance():
+        return {"instance_id": instance_id}
+
+    @app.post(f"{API_PREFIX}/restart")
+    def restart_feedback(
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+
+        def terminate_process():
+            log.info(
+                "plugin_store_restart_requested",
+                extra={"pid": os.getpid(), "instance_id": instance_id},
+            )
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        # Return HTTP 200 first, then terminate feedBack. In Docker deployments
+        # with restart: unless-stopped/always, Docker will start the container
+        # again. No Docker socket access is required.
+        timer = threading.Timer(1.0, terminate_process)
+        timer.daemon = True
+        timer.start()
+
+        return {
+            "ok": True,
+            "restarting": True,
+            "instance_id": instance_id,
+        }
 
     @app.get(f"{API_PREFIX}/catalog")
     def get_catalog(refresh: bool = Query(default=False)):

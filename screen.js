@@ -5,6 +5,8 @@
   const state = window[GLOBAL_KEY] || {
     bound: false,
     busy: new Set(),
+    restartRequired: false,
+    restarting: false,
   };
   window[GLOBAL_KEY] = state;
 
@@ -14,6 +16,7 @@
       list: document.getElementById("plugin-store-list"),
       banner: document.getElementById("plugin-store-banner"),
       refresh: document.getElementById("plugin-store-refresh"),
+      restart: document.getElementById("plugin-store-restart"),
       source: document.getElementById("plugin-store-source"),
       root: document.getElementById("plugin-store-root"),
     };
@@ -54,6 +57,83 @@
       throw new Error(message);
     }
     return payload;
+  }
+
+  function syncRestartButton() {
+    const { restart } = elements();
+    if (!restart) return;
+    restart.hidden = !state.restartRequired;
+    restart.disabled = state.restarting;
+    restart.textContent = state.restarting ? "Restarting…" : "Restart feedBack";
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function waitForNewInstance(oldInstanceId, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      await sleep(1000);
+      try {
+        const response = await fetch(
+          `${API}/instance?_=${Date.now()}`,
+          {
+            method: "GET",
+            cache: "no-store",
+            credentials: "same-origin",
+          }
+        );
+
+        if (!response.ok) continue;
+
+        const payload = await response.json();
+        if (payload.instance_id && payload.instance_id !== oldInstanceId) {
+          return true;
+        }
+      } catch (_) {
+        // Expected while the container is between processes.
+      }
+    }
+
+    return false;
+  }
+
+  async function restartFeedBack() {
+    if (state.restarting) return;
+
+    if (
+      !window.confirm(
+        "Restart feedBack now? The page will reconnect automatically when the container is back."
+      )
+    ) {
+      return;
+    }
+
+    state.restarting = true;
+    syncRestartButton();
+    setBanner("Restarting feedBack…", "info");
+
+    try {
+      const result = await api("/restart", { method: "POST" });
+      const restarted = await waitForNewInstance(result.instance_id);
+
+      if (restarted) {
+        window.location.reload();
+        return;
+      }
+
+      setBanner(
+        "feedBack did not return within 60 seconds. Check the container restart policy/logs.",
+        "error"
+      );
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    } finally {
+      state.restarting = false;
+      syncRestartButton();
+    }
   }
 
   function actionButton(label, className, disabled, handler) {
@@ -98,6 +178,8 @@
     try {
       const method = operation === "remove" ? "DELETE" : "POST";
       await api(`/${operation}/${encodeURIComponent(plugin.id)}`, { method });
+      state.restartRequired = true;
+      syncRestartButton();
       setBanner(
         `${plugin.name}: ${operation} completed. Restart feedBack to apply the change.`,
         "success"
@@ -234,10 +316,19 @@
   }
 
   function bind() {
-    const { refresh } = elements();
-    if (!refresh || refresh.dataset.pluginStoreBound === "1") return;
-    refresh.dataset.pluginStoreBound = "1";
-    refresh.addEventListener("click", () => loadCatalog(true));
+    const { refresh, restart } = elements();
+
+    if (refresh && refresh.dataset.pluginStoreBound !== "1") {
+      refresh.dataset.pluginStoreBound = "1";
+      refresh.addEventListener("click", () => loadCatalog(true));
+    }
+
+    if (restart && restart.dataset.pluginStoreBound !== "1") {
+      restart.dataset.pluginStoreBound = "1";
+      restart.addEventListener("click", restartFeedBack);
+    }
+
+    syncRestartButton();
   }
 
   // Re-hydration safe: refresh element references and avoid duplicate listeners.

@@ -11,7 +11,7 @@ A small curated plugin store for [feedBack](https://github.com/got-feedBack/feed
 - Shows **Install**, **Update**, or **Remove** based on the plugin's on-disk `plugin.json`.
 - Downloads plugins directly from the official `got-feedBack` GitHub organization as ZIP archives.
 - Validates plugin id and version before installation.
-- Requires a feedBack restart after install/update/remove.
+- Offers an in-app feedBack restart after install/update/remove.
 
 The bundled registry was generated from the official organization repository list and each repository's actual `plugin.json`. Repositories marked `private: true` and the plugin-spec documentation repository are not offered.
 
@@ -91,6 +91,31 @@ plugins:
     repository: https://github.com/got-feedBack/feedBack-plugin-notedetect
     ref: main
 ```
+
+
+## In-app restart
+
+After an install, update, or removal, the Plugin Store shows **Restart feedBack**.
+
+The restart endpoint does **not** mount or access the Docker socket. It returns
+success to the browser, waits one second, then sends `SIGTERM` to the running
+feedBack Python process. The browser polls a per-process instance ID and reloads
+only after a new feedBack process is serving requests.
+
+For Docker, this requires a restart policy such as:
+
+```yaml
+restart: unless-stopped
+```
+
+or:
+
+```yaml
+restart: always
+```
+
+If feedBack is run without a supervisor or Docker restart policy, using the
+button will stop feedBack and it will remain stopped.
 
 ## Security model
 

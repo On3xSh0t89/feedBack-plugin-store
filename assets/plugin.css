@@ -18,6 +18,13 @@
   margin-bottom: 18px;
 }
 
+.plugin-store__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .plugin-store__eyebrow {
   margin: 0 0 6px;
   font-size: 0.72rem;
@@ -169,7 +176,7 @@
     flex-direction: column;
   }
 
-  .plugin-store__header > .plugin-store__button {
-    align-self: flex-start;
+  .plugin-store__header-actions {
+    justify-content: flex-start;
   }
 }

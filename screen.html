@@ -1,0 +1,25 @@
+<section id="plugin-store-app" class="plugin-store">
+  <header class="plugin-store__header">
+    <div>
+      <p class="plugin-store__eyebrow">TOOLS</p>
+      <h1>Plugin Store</h1>
+      <p class="plugin-store__subtitle">
+        Curated plugins from the official got-feedBack GitHub organization.
+      </p>
+    </div>
+    <button id="plugin-store-refresh" class="plugin-store__button plugin-store__button--secondary" type="button">
+      Refresh
+    </button>
+  </header>
+
+  <div id="plugin-store-banner" class="plugin-store__banner" hidden></div>
+
+  <div class="plugin-store__meta">
+    <span id="plugin-store-source">Registry: loading…</span>
+    <span id="plugin-store-root"></span>
+  </div>
+
+  <div id="plugin-store-list" class="plugin-store__grid" aria-live="polite">
+    <div class="plugin-store__loading">Loading plugin catalog…</div>
+  </div>
+</section>

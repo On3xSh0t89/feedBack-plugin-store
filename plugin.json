@@ -1,0 +1,31 @@
+{
+  "id": "plugin_store",
+  "name": "Plugin Store",
+  "version": "0.1.0",
+  "description": "Browse, install, update, and remove curated feedBack plugins.",
+  "type": "tool",
+  "category": "tools",
+  "icon": "🧩",
+  "nav": {
+    "label": "Plugin Store",
+    "screen": "plugin-plugin_store"
+  },
+  "screen": "screen.html",
+  "script": "screen.js",
+  "styles": "assets/plugin.css",
+  "routes": "routes.py",
+  "settings": {
+    "html": "settings.html",
+    "category": "tools",
+    "server_files": [
+      "plugin_store/"
+    ]
+  },
+  "standards": [
+    "plugin-runtime-idempotent.v1"
+  ],
+  "license": "AGPL-3.0-only",
+  "private": false,
+  "homepage": "https://github.com/irnutsmurt/feedBack-plugin-store",
+  "author": "irnutsmurt"
+}

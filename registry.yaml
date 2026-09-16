@@ -1,0 +1,228 @@
+# Generated from public plugin repositories in the official got-feedBack GitHub organization.
+# Refresh with: python tools/sync_registry.py
+
+schema: 1
+source: https://github.com/orgs/got-feedBack/repositories
+plugins:
+- id: note_detect
+  name: Note Detection
+  description: Real-time note detection and scoring from your instrument.
+  version: 1.32.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-notedetect
+  ref: main
+- id: rig_builder
+  name: Rig Builder
+  description: Build guitar & bass rigs — amps, cabs, pedals and cab IRs — for the songs in your feedBack library.
+  version: 3.0.6
+  repository: https://github.com/got-feedBack/feedBack-plugin-rig-builder
+  ref: main
+- id: staffview
+  name: Staff View
+  description: Standard notation (grand staff) viewer for arrangements with sloppak notation data, rendered via alphaTab.
+  version: 0.3.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-staffview
+  ref: main
+- id: musicxml_import
+  name: Import MusicXML
+  description: Imports MusicXML scores into notation-format feedpaks with FluidSynth-rendered audio.
+  version: 0.2.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-musicxml-import
+  ref: main
+- id: editor
+  name: Arrangement Editor
+  description: Build and edit feedpak arrangements — import Guitar Pro tabs, sync audio, and tune every note.
+  version: 1.8.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-editor
+  ref: main
+- id: splitscreen
+  name: Split Screen
+  description: Practice multiple arrangements at once — split into 2–4 synced panels, each with its own view, pop one out to another monitor, or share one to other devices on your network.
+  version: 1.11.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-splitscreen
+  ref: main
+- id: stem_mixer
+  name: Stem Mixer
+  description: Per-stem volume mixing during playback.
+  version: 1.4.1
+  repository: https://github.com/got-feedBack/feedBack-plugin-stem-mixer
+  ref: main
+- id: virtuoso
+  name: Virtuoso
+  description: Practice studio for guitar & bass — scale, technique, and rhythm drills, timed workouts, and jam backing that teach skills you take off the screen.
+  version: 0.2.6
+  repository: https://github.com/got-feedBack/feedBack-plugin-virtuoso
+  ref: main
+- id: stem_splitter
+  name: Stem Splitter
+  description: Split feedpak stems and transcribe lyrics — remote server or opt-in local engine.
+  version: 0.6.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-stem-splitter
+  ref: main
+- id: stems
+  name: Stems Toggle
+  description: Separate and control individual song stems.
+  version: 0.9.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-stems
+  ref: main
+- id: song_preview
+  name: Song Preview
+  description: Hear a preview of songs in your library as you browse — hover on desktop, tap on touch.
+  version: 2.3.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-song-preview
+  ref: main
+- id: section_map
+  name: Section Map
+  description: Visual song-section map and navigation.
+  version: 1.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-sectionmap
+  ref: main
+- id: studio
+  name: Band Studio
+  description: Multi-track studio view.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-studio
+  ref: main
+- id: tabview
+  name: Tab View
+  description: Guitar Pro-style tablature view.
+  version: 3.0.1
+  repository: https://github.com/got-feedBack/feedBack-plugin-tabview
+  ref: main
+- id: fretboard
+  name: Fretboard View
+  description: Interactive fretboard reference and note trainer.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-fretboard
+  ref: main
+- id: metronome
+  name: Metronome
+  description: Built-in metronome and count-in.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-metronome
+  ref: main
+- id: player_guide
+  name: Controls Guide
+  description: In-app player guide and onboarding tips.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-player-guide
+  ref: main
+- id: practice_journal
+  name: Practice Journal
+  description: Track practice sessions and progress over time.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-practice
+  ref: main
+- id: setlist
+  name: Setlists
+  description: Build and play ordered setlists.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-setlist
+  ref: main
+- id: step_mode
+  name: Step Mode
+  description: Step through a chart note by note.
+  version: 0.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-stepmode
+  ref: main
+- id: drums
+  name: Drum Highway
+  description: Drum chart playback and notation.
+  version: 4.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-drums
+  ref: main
+- id: flappy_bend
+  name: Flappy Bend
+  description: Flappy-Bird-style bend-accuracy minigame.
+  version: 0.1.1
+  repository: https://github.com/got-feedBack/feedBack-plugin-flappy-bend
+  ref: main
+- id: guitar_theory
+  name: Guitar Theory Lab
+  description: Live scale, chord, and key theory overlay.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-guitar-theory
+  ref: main
+- id: invert_highway
+  name: Invert Highway
+  description: Flip the note highway direction.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-invert-highway
+  ref: main
+- id: lyrics_karaoke
+  name: Lyrics Karaoke
+  description: Karaoke-style synced lyrics during playback.
+  version: 1.4.1
+  repository: https://github.com/got-feedBack/feedBack-plugin-lyrics-karaoke
+  ref: main
+- id: loose_folder
+  name: Loose Folder Support
+  description: Browse and play loose-folder XML charts.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-loosefolder
+  ref: main
+- id: nam_tone
+  name: NAM Tone Engine
+  description: Neural amp modeling (NAM) tone engine.
+  version: 1.2.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-nam-tone
+  ref: main
+- id: piano
+  name: Piano Highway
+  description: Piano / keys arrangement support.
+  version: 4.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-piano
+  ref: main
+- id: lyrics_sync
+  name: Lyrics Sync
+  description: Author and time-align song lyrics.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-lyrics-sync
+  ref: main
+- id: strum_fighter
+  name: Strum Fighter
+  description: Fighting-game-style strumming minigame.
+  version: 0.3.4
+  repository: https://github.com/got-feedBack/feedBack-plugin-strum-fighter
+  ref: main
+- id: themes
+  name: Themes
+  description: Custom color themes and skins.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-themes
+  ref: main
+- id: transpose-chords
+  name: Transpose Chords
+  description: Transpose chords and capo helper.
+  version: 0.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-transpose-chords
+  ref: main
+- id: tutorials
+  name: Tutorials
+  description: In-app video tutorials and lessons.
+  version: 0.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-tutorials
+  ref: main
+- id: multiplayer
+  name: Multiplayer
+  description: Play together in real time.
+  version: 1.0.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-multiplayer
+  ref: main
+- id: midi_amp
+  name: MIDI Amp Control
+  description: Send MIDI Program Change messages to your amp/modeler to auto-switch presets on tone changes.
+  version: 1.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-midi
+  ref: main
+- id: keys_highway_3d
+  name: Keys Highway 3D
+  description: RS+-style 3D falling-note piano highway fed by the Sloppak Notation Format, with Web MIDI input scoring.
+  version: 0.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-keys-highway-3d
+  ref: main
+- id: jumpingtab
+  name: Jumping Tab
+  description: Jumping tab-style notation view.
+  version: 3.1.0
+  repository: https://github.com/got-feedBack/feedBack-plugin-jumpingtab
+  ref: main

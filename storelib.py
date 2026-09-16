@@ -46,8 +46,10 @@ MAX_PLUGINS_PER_STORE = 100
 DEFAULT_MAX_ARCHIVE_MB = 100
 DEFAULT_MAX_EXTRACT_MB = 500
 DEFAULT_MAX_FILES = 10000
+DEFAULT_BACKUPS_PER_PLUGIN = 2
+MAX_BACKUPS_PER_PLUGIN = 10
 
-USER_AGENT = "feedBack-plugin-store/0.2.0"
+USER_AGENT = "feedBack-plugin-store/0.3.0"
 SELF_UPDATE_CACHE_SECONDS = 300
 MAX_SELF_MANIFEST_BYTES = 128 * 1024
 
@@ -652,6 +654,7 @@ class PluginStore:
         self.third_cache_dir = self.state_dir / "third-party"
         self.stores_path = self.state_dir / "stores.json"
         self.managed_path = self.state_dir / "managed-plugins.json"
+        self.backups_dir = self.state_dir / "backups"
         self.official_cache_path = self.state_dir / "registry.yaml"
         self.official_meta_path = self.state_dir / "registry-meta.json"
         self.registry_url = discover_registry_url(self.plugin_dir)
@@ -666,10 +669,24 @@ class PluginStore:
         self.max_archive_bytes = max_archive_mb * 1024 * 1024
         self.max_extract_bytes = max_extract_mb * 1024 * 1024
         self.max_files = DEFAULT_MAX_FILES
+        try:
+            backups_per_plugin = int(
+                os.environ.get(
+                    "FEEDBACK_PLUGIN_STORE_BACKUPS_PER_PLUGIN",
+                    DEFAULT_BACKUPS_PER_PLUGIN,
+                )
+            )
+        except ValueError:
+            backups_per_plugin = DEFAULT_BACKUPS_PER_PLUGIN
+        self.backups_per_plugin = max(
+            1,
+            min(MAX_BACKUPS_PER_PLUGIN, backups_per_plugin),
+        )
 
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.third_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
         self.plugin_root.mkdir(parents=True, exist_ok=True)
 
     # ---------- low-level network/cache ----------
@@ -1191,6 +1208,208 @@ class PluginStore:
             "installed_plugins_preserved": preserved,
         }
 
+
+    # ---------- rollback snapshots ----------
+
+    def _backup_plugin_dir(self, plugin_id: str) -> Path:
+        if not ID_RE.fullmatch(plugin_id):
+            raise StoreError("Invalid plugin id.", 400)
+        path = (self.backups_dir / plugin_id).resolve(strict=False)
+        ensure_within(path, self.backups_dir)
+        return path
+
+    def _backup_records(self, plugin_id: str) -> list[dict[str, Any]]:
+        root = self._backup_plugin_dir(plugin_id)
+        if not root.is_dir():
+            return []
+
+        records: list[dict[str, Any]] = []
+        for child in root.iterdir():
+            if not child.is_dir() or child.is_symlink():
+                continue
+            meta = read_json(child / "metadata.json", {}) or {}
+            plugin_copy = child / "plugin"
+            if not isinstance(meta, dict) or not plugin_copy.is_dir():
+                continue
+            try:
+                manifest = read_plugin_manifest(plugin_copy)
+            except StoreError:
+                continue
+            if manifest.get("id") != plugin_id:
+                continue
+            version = str(manifest.get("version") or meta.get("version") or "")
+            records.append(
+                {
+                    "path": child,
+                    "version": version or None,
+                    "created_at": float(meta.get("created_at") or 0),
+                    "managed": meta.get("managed"),
+                }
+            )
+
+        records.sort(key=lambda item: item["created_at"], reverse=True)
+        return records
+
+    def _trim_backups(self, plugin_id: str) -> None:
+        records = self._backup_records(plugin_id)
+        for record in records[self.backups_per_plugin:]:
+            shutil.rmtree(record["path"], ignore_errors=True)
+
+        root = self._backup_plugin_dir(plugin_id)
+        try:
+            if root.is_dir() and not any(root.iterdir()):
+                root.rmdir()
+        except OSError:
+            pass
+
+    def _snapshot_backup(
+        self,
+        plugin_id: str,
+        target: Path,
+        managed_entry: dict[str, Any] | None,
+    ) -> Path:
+        if not target.is_dir() or target.is_symlink():
+            raise StoreError("Installed plugin cannot be safely backed up.", 409)
+
+        manifest = read_plugin_manifest(target)
+        if manifest.get("id") != plugin_id:
+            raise StoreError(
+                "Installed plugin manifest does not match its directory; rollback snapshot refused.",
+                409,
+            )
+
+        version = str(manifest.get("version") or "unknown")
+        backup_root = self._backup_plugin_dir(plugin_id)
+        backup_root.mkdir(parents=True, exist_ok=True)
+
+        stamp = int(time.time() * 1000)
+        backup = backup_root / f"{stamp}-{uuid.uuid4().hex[:8]}"
+        ensure_within(backup, self.backups_dir)
+        backup.mkdir(parents=False, exist_ok=False)
+
+        try:
+            shutil.copytree(target, backup / "plugin", symlinks=False)
+            atomic_write_json(
+                backup / "metadata.json",
+                {
+                    "plugin_id": plugin_id,
+                    "version": version,
+                    "created_at": time.time(),
+                    "managed": managed_entry if isinstance(managed_entry, dict) else None,
+                },
+            )
+        except Exception:
+            shutil.rmtree(backup, ignore_errors=True)
+            raise
+
+        self._trim_backups(plugin_id)
+        return backup
+
+    def _rollback_info(
+        self,
+        plugin_id: str,
+        installed_version: str | None,
+    ) -> dict[str, Any] | None:
+        for record in self._backup_records(plugin_id):
+            if record.get("version") and record.get("version") != installed_version:
+                return {
+                    "version": record.get("version"),
+                    "created_at": record.get("created_at"),
+                }
+        return None
+
+    def rollback(self, plugin_id: str) -> dict[str, Any]:
+        if plugin_id == "plugin_store":
+            raise StoreError("The Plugin Store cannot roll itself back.", 409)
+        if not ID_RE.fullmatch(plugin_id):
+            raise StoreError("Invalid plugin id.", 400)
+
+        target = safe_target(self.plugin_root, plugin_id)
+        if not target.is_dir() or target.is_symlink():
+            raise StoreError("Plugin must be installed before it can be rolled back.", 404)
+
+        current_manifest = read_plugin_manifest(target)
+        if current_manifest.get("id") != plugin_id:
+            raise StoreError("Installed plugin manifest does not match its directory.", 409)
+        current_version = str(current_manifest.get("version") or "")
+
+        candidate = None
+        for record in self._backup_records(plugin_id):
+            if record.get("version") != current_version:
+                candidate = record
+                break
+        if not candidate:
+            raise StoreError("No previous plugin version is available for rollback.", 404)
+
+        managed = self._managed()
+        current_managed = managed.get(plugin_id)
+
+        operation_id = uuid.uuid4().hex
+        staging = self.plugin_root / f".plugin_store-rollback-staging-{operation_id}"
+        displaced = self.plugin_root / f".plugin_store-rollback-current-{plugin_id}-{operation_id}"
+        ensure_within(staging, self.plugin_root)
+        ensure_within(displaced, self.plugin_root)
+
+        source = candidate["path"] / "plugin"
+        if not source.is_dir():
+            raise StoreError("Rollback snapshot is incomplete.", 500)
+
+        try:
+            # Stage the version we are about to restore *before* snapshotting
+            # the current version. With retention=1, the new snapshot may evict
+            # the old backup directory, but staging remains intact.
+            shutil.copytree(source, staging, symlinks=False)
+            restored_manifest = read_plugin_manifest(staging)
+            if restored_manifest.get("id") != plugin_id:
+                raise StoreError("Rollback snapshot failed manifest validation.", 500)
+
+            # Preserve the current state so the rollback itself is reversible.
+            self._snapshot_backup(
+                plugin_id,
+                target,
+                current_managed if isinstance(current_managed, dict) else None,
+            )
+
+            os.replace(target, displaced)
+            try:
+                os.replace(staging, target)
+            except Exception:
+                if displaced.exists() and not target.exists():
+                    os.replace(displaced, target)
+                raise
+
+            shutil.rmtree(displaced, ignore_errors=True)
+
+            previous_managed = candidate.get("managed")
+            if isinstance(previous_managed, dict):
+                managed[plugin_id] = previous_managed
+            else:
+                managed.pop(plugin_id, None)
+            self._save_managed(managed)
+
+            self.log.info(
+                "plugin_store_rollback_complete",
+                extra={
+                    "plugin_id": plugin_id,
+                    "from_version": current_version,
+                    "to_version": candidate.get("version"),
+                },
+            )
+            return {
+                "ok": True,
+                "plugin_id": plugin_id,
+                "operation": "rollback",
+                "from_version": current_version or None,
+                "version": candidate.get("version"),
+                "restart_required": True,
+            }
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            if displaced.exists():
+                shutil.rmtree(displaced, ignore_errors=True)
+            self._trim_backups(plugin_id)
+
     # ---------- catalog ----------
 
     def _installed_state(
@@ -1227,6 +1446,9 @@ class PluginStore:
             "can_install": True,
             "can_update": False,
             "can_remove": False,
+            "rollback_available": False,
+            "rollback_version": None,
+            "rollback_created_at": None,
         }
 
         if compatibility:
@@ -1291,6 +1513,12 @@ class PluginStore:
                 state["can_install"] = False
                 state["can_update"] = bool(state["compatible"] and (not third_party or managed_by_store))
                 state["can_remove"] = bool(not third_party or managed_by_store)
+
+            rollback = self._rollback_info(entry["id"], state.get("installed_version"))
+            if rollback:
+                state["rollback_available"] = True
+                state["rollback_version"] = rollback.get("version")
+                state["rollback_created_at"] = rollback.get("created_at")
 
         return state
 
@@ -1504,6 +1732,8 @@ class PluginStore:
         ensure_within(backup, self.plugin_root)
         work_dir.mkdir(parents=True, exist_ok=False)
 
+        rollback_snapshot: Path | None = None
+        update_committed = False
         try:
             self._download(entry, archive, official=not third_party)
             safe_extract_zip(
@@ -1531,6 +1761,12 @@ class PluginStore:
             shutil.copytree(source_root, staging, symlinks=False)
 
             if replace:
+                current_managed = managed.get(plugin_id)
+                rollback_snapshot = self._snapshot_backup(
+                    plugin_id,
+                    target,
+                    current_managed if isinstance(current_managed, dict) else None,
+                )
                 os.replace(target, backup)
             try:
                 os.replace(staging, target)
@@ -1550,6 +1786,7 @@ class PluginStore:
                 "installed_at": time.time(),
             }
             self._save_managed(managed)
+            update_committed = True
 
             self.log.info(
                 "plugin_store_install_complete",
@@ -1574,6 +1811,94 @@ class PluginStore:
                 shutil.rmtree(staging, ignore_errors=True)
             if work_dir.exists():
                 shutil.rmtree(work_dir, ignore_errors=True)
+            if replace and rollback_snapshot is not None and not update_committed:
+                shutil.rmtree(rollback_snapshot, ignore_errors=True)
+                self._trim_backups(plugin_id)
+
+
+    def update_all(self, *, acknowledge_third_party: bool = False) -> dict[str, Any]:
+        catalog = self.catalog(force_refresh=False)
+        candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+        for store in catalog.get("stores", []):
+            if not isinstance(store, dict):
+                continue
+            for plugin in store.get("plugins", []):
+                if (
+                    isinstance(plugin, dict)
+                    and plugin.get("status") == "update_available"
+                    and plugin.get("can_update") is True
+                ):
+                    candidates.append((store, plugin))
+
+        third_party_count = sum(
+            1 for store, _plugin in candidates if store.get("third_party") is True
+        )
+        if third_party_count and not acknowledge_third_party:
+            raise StoreError(
+                "Update All includes third-party plugins. Explicit risk acknowledgement is required.",
+                400,
+            )
+
+        updated: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+
+        for store, plugin in candidates:
+            try:
+                result = self.install(
+                    str(plugin["id"]),
+                    replace=True,
+                    store_id=str(store["id"]),
+                    acknowledge_third_party=store.get("third_party") is True,
+                )
+                updated.append(
+                    {
+                        "plugin_id": plugin["id"],
+                        "name": plugin.get("name"),
+                        "store_id": store["id"],
+                        "store_name": store.get("name"),
+                        "version": result.get("version"),
+                    }
+                )
+            except StoreError as exc:
+                failed.append(
+                    {
+                        "plugin_id": plugin.get("id"),
+                        "name": plugin.get("name"),
+                        "store_id": store.get("id"),
+                        "store_name": store.get("name"),
+                        "error": exc.message,
+                    }
+                )
+            except Exception as exc:
+                self.log.exception(
+                    "plugin_store_update_all_unexpected_failure",
+                    extra={
+                        "plugin_id": plugin.get("id"),
+                        "store_id": store.get("id"),
+                    },
+                )
+                failed.append(
+                    {
+                        "plugin_id": plugin.get("id"),
+                        "name": plugin.get("name"),
+                        "store_id": store.get("id"),
+                        "store_name": store.get("name"),
+                        "error": str(exc),
+                    }
+                )
+
+        return {
+            "ok": len(failed) == 0,
+            "operation": "update_all",
+            "candidates": len(candidates),
+            "updated_count": len(updated),
+            "failed_count": len(failed),
+            "third_party_count": third_party_count,
+            "updated": updated,
+            "failed": failed,
+            "restart_required": bool(updated),
+        }
 
     def remove(self, plugin_id: str, store_id: str = OFFICIAL_STORE_ID) -> dict[str, Any]:
         if plugin_id == "plugin_store":

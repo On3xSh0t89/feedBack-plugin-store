@@ -1,8 +1,8 @@
 {
   "id": "plugin_store",
   "name": "Plugin Store",
-  "version": "0.2.1",
-  "description": "Browse official feedBack plugins and optional third-party plugin stores.",
+  "version": "0.3.0",
+  "description": "Browse, install, update, roll back, and manage official feedBack plugins and optional third-party plugin stores.",
   "type": "tool",
   "category": "tools",
   "icon": "assets/thumb.svg",

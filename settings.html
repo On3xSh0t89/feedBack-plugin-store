@@ -14,4 +14,10 @@
     change, Plugin Store can restart feedBack by terminating the application process;
     Docker or another supervisor must be configured to start it again.
   </p>
+  <p>
+    Before plugin updates, Plugin Store keeps bounded rollback snapshots under
+    <code>CONFIG_DIR/plugin_store/backups</code>. The default is two snapshots
+    per plugin and can be changed with
+    <code>FEEDBACK_PLUGIN_STORE_BACKUPS_PER_PLUGIN</code>.
+  </p>
 </section>

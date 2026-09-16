@@ -42,6 +42,36 @@
     <span id="plugin-store-root"></span>
   </div>
 
+
+  <div class="plugin-store__toolbar">
+    <label class="plugin-store__search">
+      <span class="plugin-store__sr-only">Search plugins</span>
+      <input
+        id="plugin-store-search"
+        type="search"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="Search plugins…"
+      >
+    </label>
+
+    <div id="plugin-store-filters" class="plugin-store__filters" aria-label="Plugin filters">
+      <button type="button" class="plugin-store__filter is-active" data-filter="all">All</button>
+      <button type="button" class="plugin-store__filter" data-filter="installed">Installed</button>
+      <button type="button" class="plugin-store__filter" data-filter="updates">Updates</button>
+      <button type="button" class="plugin-store__filter" data-filter="available">Available</button>
+    </div>
+
+    <button
+      id="plugin-store-update-all"
+      class="plugin-store__button plugin-store__button--primary"
+      type="button"
+      hidden
+    >
+      Update All
+    </button>
+  </div>
+
   <div id="plugin-store-list" class="plugin-store__stores" aria-live="polite">
     <div class="plugin-store__loading">Loading plugin catalog…</div>
   </div>

@@ -10,6 +10,8 @@
     restarting: false,
     catalog: null,
     sidebarObserver: null,
+    searchQuery: "",
+    filter: "all",
   };
   window[GLOBAL_KEY] = state;
 
@@ -24,6 +26,9 @@
       updateLink: document.getElementById("plugin-store-update-link"),
       refresh: document.getElementById("plugin-store-refresh"),
       restart: document.getElementById("plugin-store-restart"),
+      search: document.getElementById("plugin-store-search"),
+      filters: document.getElementById("plugin-store-filters"),
+      updateAll: document.getElementById("plugin-store-update-all"),
       addStore: document.getElementById("plugin-store-add-store"),
       root: document.getElementById("plugin-store-root"),
       host: document.getElementById("plugin-store-host"),
@@ -313,6 +318,56 @@
     return el;
   }
 
+  function pluginMatchesView(plugin, store) {
+    const filter = state.filter || "all";
+    if (filter === "installed" && !plugin.installed) return false;
+    if (
+      filter === "updates" &&
+      !(plugin.status === "update_available" && plugin.can_update)
+    ) return false;
+    if (filter === "available" && plugin.installed) return false;
+
+    const query = (state.searchQuery || "").trim().toLowerCase();
+    if (!query) return true;
+
+    const haystack = [
+      plugin.id,
+      plugin.name,
+      plugin.description,
+      plugin.repository,
+      store && store.name,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(query);
+  }
+
+  function availableUpdates(data) {
+    const updates = [];
+    for (const store of (data && data.stores) || []) {
+      for (const plugin of store.plugins || []) {
+        if (plugin.status === "update_available" && plugin.can_update) {
+          updates.push({ store, plugin });
+        }
+      }
+    }
+    return updates;
+  }
+
+  function syncUpdateAllButton() {
+    const { updateAll } = elements();
+    if (!updateAll) return;
+    const updates = availableUpdates(state.catalog);
+    const busy = state.busy.has("update-all");
+    updateAll.hidden = updates.length === 0;
+    updateAll.disabled = busy;
+    updateAll.textContent = busy
+      ? "Updating…"
+      : `Update All (${updates.length})`;
+  }
+
   function statusLabel(plugin) {
     switch (plugin.status) {
       case "installed":
@@ -383,6 +438,99 @@
       setBanner(error.message || String(error), "error");
     } finally {
       state.busy.delete(key);
+      renderCatalog(state.catalog);
+    }
+  }
+
+  async function rollbackPlugin(plugin) {
+    const version = plugin.rollback_version || "previous version";
+    if (!window.confirm(
+      `Roll back ${plugin.name} to ${version}?\n\nThe current version will be saved as another rollback snapshot. The change takes effect after feedBack restarts.`
+    )) return;
+
+    const key = `rollback:${plugin.id}`;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    renderCatalog(state.catalog);
+    setBanner(`Rolling back ${plugin.name}…`);
+
+    try {
+      const result = await api(`/rollback/${encodeURIComponent(plugin.id)}`, {
+        method: "POST",
+      });
+      state.restartRequired = true;
+      syncRestartButton();
+      setBanner(
+        `${plugin.name} rolled back to ${result.version || version}. Restart feedBack to apply it.`,
+        "success"
+      );
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    } finally {
+      state.busy.delete(key);
+      renderCatalog(state.catalog);
+    }
+  }
+
+  async function updateAllPlugins() {
+    const updates = availableUpdates(state.catalog);
+    if (!updates.length || state.busy.has("update-all")) return;
+
+    const thirdParty = updates.filter(({ store }) => store.third_party);
+    const names = updates.map(({ plugin }) => plugin.name).join(", ");
+    let message =
+      `Update ${updates.length} plugin${updates.length === 1 ? "" : "s"}?\n\n${names}\n\n` +
+      "A rollback snapshot will be created before each update. Restart feedBack once when all updates finish.";
+
+    if (thirdParty.length) {
+      message +=
+        `\n\nWARNING: ${thirdParty.length} update${thirdParty.length === 1 ? "" : "s"} ` +
+        "come from third-party stores. Those plugins can execute unreviewed code with feedBack's permissions.";
+    }
+    if (!window.confirm(message)) return;
+
+    state.busy.add("update-all");
+    syncUpdateAllButton();
+    renderCatalog(state.catalog);
+    setBanner(`Updating ${updates.length} plugins…`);
+
+    try {
+      const result = await api("/update-all", {
+        method: "POST",
+        body: JSON.stringify({
+          acknowledge_third_party: thirdParty.length > 0,
+        }),
+      });
+
+      if (result.updated_count > 0) {
+        state.restartRequired = true;
+        syncRestartButton();
+      }
+
+      if (result.failed_count > 0) {
+        const failures = (result.failed || [])
+          .map((item) => `${item.name || item.plugin_id}: ${item.error}`)
+          .join("  ");
+        setBanner(
+          `Updated ${result.updated_count}; ${result.failed_count} failed. ${failures}`,
+          "warning"
+        );
+      } else if (result.updated_count > 0) {
+        setBanner(
+          `Updated ${result.updated_count} plugin${result.updated_count === 1 ? "" : "s"}. Restart feedBack to apply the changes.`,
+          "success"
+        );
+      } else {
+        setBanner("No plugin updates are currently available.", "info");
+      }
+
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    } finally {
+      state.busy.delete("update-all");
+      syncUpdateAllButton();
       renderCatalog(state.catalog);
     }
   }
@@ -478,6 +626,18 @@
             !plugin.can_update && store.third_party
               ? "Automatic update is blocked because this install is not managed by this store or is incompatible."
               : ""
+          )
+        );
+      }
+
+      if (plugin.rollback_available) {
+        const rollbackBusy = state.busy.has(`rollback:${plugin.id}`);
+        actions.append(
+          actionButton(
+            `Roll Back to ${plugin.rollback_version || "Previous"}`,
+            "plugin-store__button--secondary",
+            rollbackBusy,
+            () => rollbackPlugin(plugin)
           )
         );
       }
@@ -603,17 +763,25 @@
 
     const grid = document.createElement("div");
     grid.className = "plugin-store__grid";
-    for (const plugin of store.plugins || []) {
+    const visiblePlugins = (store.plugins || []).filter((plugin) =>
+      pluginMatchesView(plugin, store)
+    );
+
+    for (const plugin of visiblePlugins) {
       grid.append(renderPlugin(plugin, store));
     }
-    if (!store.plugins || store.plugins.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "plugin-store__loading";
-      empty.textContent = store.warning
-        ? "This store is currently unavailable."
-        : "This store contains no plugins.";
-      grid.append(empty);
+
+    if (visiblePlugins.length === 0) {
+      if ((store.plugins || []).length === 0 && store.warning) {
+        const empty = document.createElement("div");
+        empty.className = "plugin-store__loading";
+        empty.textContent = "This store is currently unavailable.";
+        grid.append(empty);
+      } else {
+        return null;
+      }
     }
+
     section.append(grid);
     return section;
   }
@@ -624,15 +792,31 @@
     if (!list) return;
 
     list.replaceChildren();
+    let renderedStores = 0;
     for (const store of data.stores || []) {
-      list.append(renderStore(store));
+      const section = renderStore(store);
+      if (section) {
+        list.append(section);
+        renderedStores += 1;
+      }
     }
-    if (!data.stores || data.stores.length === 0) {
+    if (renderedStores === 0) {
       const empty = document.createElement("div");
       empty.className = "plugin-store__loading";
-      empty.textContent = "No plugin stores are configured.";
+      empty.textContent =
+        (state.searchQuery || state.filter !== "all")
+          ? "No plugins match the current search/filter."
+          : "No plugin stores are configured.";
       list.append(empty);
     }
+
+    const { filters } = elements();
+    if (filters) {
+      for (const button of filters.querySelectorAll("[data-filter]")) {
+        button.classList.toggle("is-active", button.dataset.filter === state.filter);
+      }
+    }
+    syncUpdateAllButton();
 
     if (root) root.textContent = data.plugin_root ? `Install path: ${data.plugin_root}` : "";
     if (host) {
@@ -744,6 +928,7 @@
   function bind() {
     const {
       refresh, restart, addStore, addForm, addClose, addCancel, dialog,
+      search, filters, updateAll,
     } = elements();
 
     if (refresh && refresh.dataset.pluginStoreBound !== "1") {
@@ -753,6 +938,28 @@
         loadCatalog(true);
       });
     }
+    if (search && search.dataset.pluginStoreBound !== "1") {
+      search.dataset.pluginStoreBound = "1";
+      search.value = state.searchQuery || "";
+      search.addEventListener("input", () => {
+        state.searchQuery = search.value || "";
+        renderCatalog(state.catalog);
+      });
+    }
+    if (filters && filters.dataset.pluginStoreBound !== "1") {
+      filters.dataset.pluginStoreBound = "1";
+      filters.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-filter]");
+        if (!button) return;
+        state.filter = button.dataset.filter || "all";
+        renderCatalog(state.catalog);
+      });
+    }
+    if (updateAll && updateAll.dataset.pluginStoreBound !== "1") {
+      updateAll.dataset.pluginStoreBound = "1";
+      updateAll.addEventListener("click", updateAllPlugins);
+    }
+
     if (restart && restart.dataset.pluginStoreBound !== "1") {
       restart.dataset.pluginStoreBound = "1";
       restart.addEventListener("click", restartFeedBack);

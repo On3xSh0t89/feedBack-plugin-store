@@ -12,6 +12,9 @@ A plugin manager for [feedBack](https://github.com/got-feedBack/feedBack), maint
 - Deep-links installed plugins to their native **Settings** panel and/or plugin screen.
 - Offers an in-app feedBack restart after a plugin lifecycle change.
 - Supports optional, clearly-labelled **third-party stores** hosted as YAML on GitHub.
+- Searches and filters plugins by installed/update/available state.
+- Supports **Update All** with a single restart after the batch completes.
+- Creates bounded pre-update rollback snapshots and exposes **Roll Back** from the plugin card.
 - Uses conditional HTTP requests (`ETag` / `If-None-Match`) and local cache files so unchanged catalogs are not repeatedly downloaded.
 
 The bundled official registry is generated from the public repositories under the `got-feedBack` organization and each plugin repository's actual `plugin.json`. Repositories marked `private: true`, forks, and non-runtime repositories such as `feedBack-plugin-spec` are not offered.
@@ -39,6 +42,22 @@ services:
 
     restart: unless-stopped
 ```
+
+## Rollback storage
+
+Before replacing an installed plugin, Plugin Store saves the existing plugin
+directory under `/config/plugin_store/backups`. By default the two most recent
+snapshots per plugin are retained.
+
+Override the retention count (1–10) with:
+
+```yaml
+environment:
+  FEEDBACK_PLUGIN_STORE_BACKUPS_PER_PLUGIN: "2"
+```
+
+Rollback itself snapshots the current version first, so a rollback can be
+reversed if necessary.
 
 ## Install the store
 

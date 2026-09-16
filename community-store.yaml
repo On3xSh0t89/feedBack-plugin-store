@@ -1,0 +1,14 @@
+schema: 1
+
+store:
+  name: Example Community Store
+  description: Example third-party feedBack plugin catalog.
+  homepage: https://github.com/example/community-store
+
+plugins:
+  - id: example_plugin
+    name: Example Plugin
+    description: Example third-party plugin entry.
+    version: 1.0.0
+    repository: https://github.com/example/feedBack-plugin-example
+    ref: main

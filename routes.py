@@ -113,6 +113,30 @@ def setup(app: FastAPI, context: dict) -> None:
         except storelib.StoreError as exc:
             fail(exc)
 
+    @app.post(f"{API_PREFIX}/update-all")
+    def update_all_plugins(
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.update_all(
+                acknowledge_third_party=payload.get("acknowledge_third_party") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.post(f"{API_PREFIX}/rollback/{{plugin_id}}")
+    def rollback_plugin(
+        plugin_id: str,
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.rollback(plugin_id)
+        except storelib.StoreError as exc:
+            fail(exc)
+
     # v0.2 routes include an explicit store id so two catalogs can never be
     # ambiguous about which repository is being installed.
     @app.post(f"{API_PREFIX}/install/{{store_id}}/{{plugin_id}}")

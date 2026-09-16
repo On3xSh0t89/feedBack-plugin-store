@@ -9,6 +9,7 @@
     restartRequired: false,
     restarting: false,
     catalog: null,
+    sidebarObserver: null,
   };
   window[GLOBAL_KEY] = state;
 
@@ -17,6 +18,10 @@
       app: document.getElementById("plugin-store-app"),
       list: document.getElementById("plugin-store-list"),
       banner: document.getElementById("plugin-store-banner"),
+      updateBanner: document.getElementById("plugin-store-update-banner"),
+      updateTitle: document.getElementById("plugin-store-update-title"),
+      updateDetail: document.getElementById("plugin-store-update-detail"),
+      updateLink: document.getElementById("plugin-store-update-link"),
       refresh: document.getElementById("plugin-store-refresh"),
       restart: document.getElementById("plugin-store-restart"),
       addStore: document.getElementById("plugin-store-add-store"),
@@ -31,6 +36,101 @@
       addClose: document.getElementById("plugin-store-add-close"),
       addCancel: document.getElementById("plugin-store-add-cancel"),
     };
+  }
+
+  function sidebarStoreIcon() {
+    return `
+      <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor"
+           stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M4 7h16l-1 13H5L4 7zm3 0V5a5 5 0 0110 0v2M8 11h.01M12 11h.01M16 11h.01"/>
+      </svg>`;
+  }
+
+  function syncSidebarEntryActive() {
+    const entry = document.getElementById("plugin-store-sidebar-entry");
+    const pluginScreen = document.getElementById("plugin-plugin_store");
+    if (!entry || !pluginScreen) return;
+
+    const active = pluginScreen.classList.contains("active");
+    entry.classList.toggle("bg-fb-card", active);
+    entry.classList.toggle("text-fb-text", active);
+    entry.classList.toggle("text-fb-textDim", !active);
+  }
+
+  function ensureSidebarEntry() {
+    const nav = document.getElementById("v3-nav");
+    if (!nav) return;
+
+    if (document.getElementById("plugin-store-sidebar-entry")) {
+      syncSidebarEntryActive();
+      return;
+    }
+
+    const pluginsEntry = nav.querySelector('[data-v3-nav="plugins"]');
+    if (!pluginsEntry) return;
+
+    const entry = document.createElement("a");
+    entry.id = "plugin-store-sidebar-entry";
+    entry.href = "#/plugin-store";
+    entry.className =
+      "flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-fb-textDim " +
+      "hover:text-fb-text hover:bg-fb-card/50 transition-colors";
+    entry.innerHTML =
+      sidebarStoreIcon() +
+      '<span class="truncate v3-nav-label">Plugin Store</span>';
+
+    entry.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (typeof window.showScreen === "function") {
+        window.showScreen("plugin-plugin_store");
+      }
+      syncSidebarEntryActive();
+    });
+
+    pluginsEntry.insertAdjacentElement("afterend", entry);
+    syncSidebarEntryActive();
+  }
+
+  async function checkSelfUpdate(forceRefresh = false) {
+    const {
+      updateBanner,
+      updateTitle,
+      updateDetail,
+      updateLink,
+    } = elements();
+
+    if (!updateBanner) return;
+
+    try {
+      const status = await api(
+        `/self-update?refresh=${forceRefresh ? "true" : "false"}`
+      );
+
+      if (!status.update_available) {
+        updateBanner.hidden = true;
+        return;
+      }
+
+      const installed = status.installed_version || "unknown";
+      const available = status.available_version || "newer";
+
+      if (updateTitle) {
+        updateTitle.textContent = `Plugin Store ${available} is available`;
+      }
+      if (updateDetail) {
+        updateDetail.textContent =
+          `You are running ${installed}. Update the Plugin Store from GitHub, then restart feedBack.`;
+      }
+      if (updateLink && status.homepage) {
+        updateLink.href = status.homepage;
+      }
+
+      updateBanner.hidden = false;
+    } catch (_) {
+      // Advisory only: a failed GitHub check must never break the catalog.
+      updateBanner.hidden = true;
+    }
   }
 
   function setBanner(message, kind = "info") {
@@ -648,7 +748,10 @@
 
     if (refresh && refresh.dataset.pluginStoreBound !== "1") {
       refresh.dataset.pluginStoreBound = "1";
-      refresh.addEventListener("click", () => loadCatalog(true));
+      refresh.addEventListener("click", () => {
+        checkSelfUpdate(true);
+        loadCatalog(true);
+      });
     }
     if (restart && restart.dataset.pluginStoreBound !== "1") {
       restart.dataset.pluginStoreBound = "1";
@@ -679,7 +782,19 @@
   }
 
   bind();
+  ensureSidebarEntry();
+  checkSelfUpdate(false);
   loadCatalog(false);
+
+  // feedBack v3 currently rebuilds a hard-coded sidebar. Re-add the Plugin
+  // Store shortcut if the shell replaces the nav DOM after plugins load.
+  if (!state.sidebarObserver && document.body) {
+    state.sidebarObserver = new MutationObserver(() => ensureSidebarEntry());
+    state.sidebarObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  }
 
   if (!state.bound && window.feedBack && typeof window.feedBack.on === "function") {
     state.bound = true;
@@ -688,8 +803,13 @@
         typeof event === "string"
           ? event
           : event && (event.screen || event.screenId || event.detail);
+
+      ensureSidebarEntry();
+      syncSidebarEntryActive();
+
       if (screenId === "plugin-plugin_store") {
         bind();
+        checkSelfUpdate(false);
         loadCatalog(false);
       }
     });

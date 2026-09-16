@@ -394,3 +394,37 @@
     padding: 13px;
   }
 }
+
+
+.plugin-store__update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid #4d8fd8;
+  border-radius: 10px;
+  background: color-mix(in srgb, #4d8fd8 12%, transparent);
+}
+
+.plugin-store__update-banner[hidden] {
+  display: none;
+}
+
+.plugin-store__update-detail {
+  margin-top: 3px;
+  font-size: 0.84rem;
+  opacity: 0.76;
+}
+
+@media (max-width: 640px) {
+  .plugin-store__update-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .plugin-store__update-banner .plugin-store__button {
+    align-self: flex-start;
+  }
+}

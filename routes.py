@@ -74,6 +74,13 @@ def setup(app: FastAPI, context: dict) -> None:
         timer.start()
         return {"ok": True, "restarting": True, "instance_id": instance_id}
 
+    @app.get(f"{API_PREFIX}/self-update")
+    def get_self_update(refresh: bool = Query(default=False)):
+        try:
+            return store.self_update_status(force=refresh)
+        except storelib.StoreError as exc:
+            fail(exc)
+
     @app.get(f"{API_PREFIX}/catalog")
     def get_catalog(refresh: bool = Query(default=False)):
         try:

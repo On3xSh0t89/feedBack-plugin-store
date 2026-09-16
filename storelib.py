@@ -48,6 +48,8 @@ DEFAULT_MAX_EXTRACT_MB = 500
 DEFAULT_MAX_FILES = 10000
 
 USER_AGENT = "feedBack-plugin-store/0.2.0"
+SELF_UPDATE_CACHE_SECONDS = 300
+MAX_SELF_MANIFEST_BYTES = 128 * 1024
 
 
 class StoreError(Exception):
@@ -697,6 +699,143 @@ class PluginStore:
                 "last_modified": response.headers.get("Last-Modified") or "",
             }
             return text, response_headers, final_url
+
+
+    def _local_store_manifest(self) -> dict[str, Any]:
+        manifest_path = self.plugin_dir / "plugin.json"
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StoreError("Plugin Store plugin.json is unreadable.", 500) from exc
+        if not isinstance(data, dict):
+            raise StoreError("Plugin Store plugin.json must be a JSON object.", 500)
+        return data
+
+    def _self_manifest_url(self, manifest: dict[str, Any]) -> str | None:
+        homepage = str(manifest.get("homepage") or "").strip()
+        parsed = parse_github_repo(homepage)
+        if not parsed:
+            return None
+        owner, repo = parsed
+        owner_q = urllib.parse.quote(owner, safe="")
+        repo_q = urllib.parse.quote(repo, safe="")
+        return (
+            f"https://raw.githubusercontent.com/"
+            f"{owner_q}/{repo_q}/main/plugin.json"
+        )
+
+    def self_update_status(self, force: bool = False) -> dict[str, Any]:
+        """Check the Plugin Store's own GitHub manifest for a newer version."""
+        local_manifest = self._local_store_manifest()
+        local_version = str(local_manifest.get("version") or "")
+        homepage = str(local_manifest.get("homepage") or "").strip() or None
+        remote_url = self._self_manifest_url(local_manifest)
+
+        result = {
+            "installed_version": local_version or None,
+            "available_version": None,
+            "update_available": False,
+            "homepage": homepage,
+            "source_url": remote_url,
+            "warning": None,
+        }
+
+        if not remote_url:
+            result["warning"] = "Plugin Store homepage is not a supported GitHub repository URL."
+            return result
+
+        cache_path = self.state_dir / "self-update.json"
+        cached = read_json(cache_path, {}) or {}
+        now = time.time()
+
+        if (
+            not force
+            and cached
+            and now - float(cached.get("checked_at", 0)) < SELF_UPDATE_CACHE_SECONDS
+        ):
+            remote_version = str(cached.get("remote_version") or "")
+            result["available_version"] = remote_version or None
+            if local_version and remote_version:
+                result["update_available"] = compare_versions(local_version, remote_version) < 0
+            result["warning"] = cached.get("warning")
+            return result
+
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json, text/plain;q=0.9, */*;q=0.1",
+            "Cache-Control": "no-cache",
+        }
+        if cached.get("etag"):
+            headers["If-None-Match"] = str(cached["etag"])
+        if cached.get("last_modified"):
+            headers["If-Modified-Since"] = str(cached["last_modified"])
+
+        request = urllib.request.Request(remote_url, headers=headers)
+
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = response.read(MAX_SELF_MANIFEST_BYTES + 1)
+                if len(payload) > MAX_SELF_MANIFEST_BYTES:
+                    raise StoreError("Remote Plugin Store manifest is too large.", 502)
+
+                remote = json.loads(payload.decode("utf-8"))
+                if not isinstance(remote, dict):
+                    raise StoreError("Remote Plugin Store manifest is not a JSON object.", 502)
+                if remote.get("id") != "plugin_store":
+                    raise StoreError("Remote Plugin Store manifest has the wrong plugin id.", 502)
+
+                remote_version = str(remote.get("version") or "")
+                if not SEMVER_RE.fullmatch(remote_version):
+                    raise StoreError("Remote Plugin Store manifest has an invalid version.", 502)
+
+                atomic_write_json(
+                    cache_path,
+                    {
+                        "checked_at": now,
+                        "remote_version": remote_version,
+                        "etag": response.headers.get("ETag"),
+                        "last_modified": response.headers.get("Last-Modified"),
+                        "warning": None,
+                    },
+                )
+                result["available_version"] = remote_version
+                if local_version:
+                    result["update_available"] = compare_versions(local_version, remote_version) < 0
+                return result
+
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304 and cached.get("remote_version"):
+                cached["checked_at"] = now
+                cached["warning"] = None
+                atomic_write_json(cache_path, cached)
+                remote_version = str(cached.get("remote_version") or "")
+                result["available_version"] = remote_version or None
+                if local_version and remote_version:
+                    result["update_available"] = compare_versions(local_version, remote_version) < 0
+                return result
+            warning = f"Plugin Store update check failed: HTTP {exc.code}"
+        except StoreError:
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            warning = f"Plugin Store update check failed: {exc}"
+
+        remote_version = str(cached.get("remote_version") or "")
+        result["available_version"] = remote_version or None
+        if local_version and remote_version:
+            result["update_available"] = compare_versions(local_version, remote_version) < 0
+        result["warning"] = warning
+
+        atomic_write_json(
+            cache_path,
+            {
+                "checked_at": now,
+                "remote_version": remote_version or None,
+                "etag": cached.get("etag"),
+                "last_modified": cached.get("last_modified"),
+                "warning": warning,
+            },
+        )
+        return result
 
     def _bundled_registry(self) -> dict[str, Any]:
         text = (self.plugin_dir / "registry.yaml").read_text(encoding="utf-8")

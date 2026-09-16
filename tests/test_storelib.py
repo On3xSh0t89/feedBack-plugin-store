@@ -100,7 +100,7 @@ def test_install_and_remove_cycle(tmp_path, monkeypatch):
         zf.writestr("feedBack-plugin-notedetect-main/plugin.json", json.dumps(manifest))
         zf.writestr("feedBack-plugin-notedetect-main/screen.js", "// test")
 
-    def fake_download(entry, destination):
+    def fake_download(entry, destination, **kwargs):
         destination.write_bytes(archive_template.read_bytes())
 
     monkeypatch.setattr(store, "_download", fake_download)

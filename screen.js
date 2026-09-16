@@ -1,12 +1,14 @@
 (() => {
+  'use strict';
+
   const GLOBAL_KEY = "__feedBackPluginStore";
   const API = "/api/plugins/plugin_store";
-
   const state = window[GLOBAL_KEY] || {
     bound: false,
     busy: new Set(),
     restartRequired: false,
     restarting: false,
+    catalog: null,
   };
   window[GLOBAL_KEY] = state;
 
@@ -17,8 +19,17 @@
       banner: document.getElementById("plugin-store-banner"),
       refresh: document.getElementById("plugin-store-refresh"),
       restart: document.getElementById("plugin-store-restart"),
-      source: document.getElementById("plugin-store-source"),
+      addStore: document.getElementById("plugin-store-add-store"),
       root: document.getElementById("plugin-store-root"),
+      host: document.getElementById("plugin-store-host"),
+      dialog: document.getElementById("plugin-store-add-dialog"),
+      addForm: document.getElementById("plugin-store-add-form"),
+      addUrl: document.getElementById("plugin-store-add-url"),
+      addAck: document.getElementById("plugin-store-add-ack"),
+      addSubmit: document.getElementById("plugin-store-add-submit"),
+      addError: document.getElementById("plugin-store-add-error"),
+      addClose: document.getElementById("plugin-store-add-close"),
+      addCancel: document.getElementById("plugin-store-add-cancel"),
     };
   }
 
@@ -41,11 +52,15 @@
     if (options.method && options.method !== "GET") {
       headers.set("X-FeedBack-Plugin-Store", "1");
     }
+    if (options.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
 
     const response = await fetch(`${API}${path}`, {
       ...options,
       headers,
       credentials: "same-origin",
+      cache: "no-store",
     });
 
     const payload = await response.json().catch(() => ({}));
@@ -73,59 +88,47 @@
 
   async function waitForNewInstance(oldInstanceId, timeoutMs = 60000) {
     const deadline = Date.now() + timeoutMs;
-
     while (Date.now() < deadline) {
       await sleep(1000);
       try {
-        const response = await fetch(
-          `${API}/instance?_=${Date.now()}`,
-          {
-            method: "GET",
-            cache: "no-store",
-            credentials: "same-origin",
-          }
-        );
-
+        const response = await fetch(`${API}/instance?_=${Date.now()}`, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
         if (!response.ok) continue;
-
         const payload = await response.json();
         if (payload.instance_id && payload.instance_id !== oldInstanceId) {
           return true;
         }
       } catch (_) {
-        // Expected while the container is between processes.
+        // Expected while Docker is between the old and new feedBack process.
       }
     }
-
     return false;
   }
 
   async function restartFeedBack() {
     if (state.restarting) return;
-
-    if (
-      !window.confirm(
-        "Restart feedBack now? The page will reconnect automatically when the container is back."
-      )
-    ) {
-      return;
-    }
+    if (!window.confirm(
+      "Restart feedBack now? The page will wait for the container to return and then reload automatically."
+    )) return;
 
     state.restarting = true;
     syncRestartButton();
-    setBanner("Restarting feedBack…", "info");
+    setBanner("Restarting feedBack… waiting for the server to come back online.", "info");
 
     try {
       const result = await api("/restart", { method: "POST" });
       const restarted = await waitForNewInstance(result.instance_id);
-
       if (restarted) {
+        setBanner("feedBack is back. Reloading…", "success");
+        await sleep(250);
         window.location.reload();
         return;
       }
-
       setBanner(
-        "feedBack did not return within 60 seconds. Check the container restart policy/logs.",
+        "feedBack did not return within 60 seconds. Check the container restart policy and logs.",
         "error"
       );
     } catch (error) {
@@ -136,14 +139,78 @@
     }
   }
 
-  function actionButton(label, className, disabled, handler) {
+  function openSettingsPanel(pluginId, tries = 16) {
+    let target = null;
+    const all = document.querySelectorAll("#plugin-settings details[data-plugin-id]");
+    for (const details of all) {
+      if (details.getAttribute("data-plugin-id") === pluginId) {
+        target = details;
+        break;
+      }
+    }
+    if (target) {
+      target.open = true;
+      try {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {
+        target.scrollIntoView();
+      }
+      return;
+    }
+    if (tries > 0) {
+      window.requestAnimationFrame(() => openSettingsPanel(pluginId, tries - 1));
+    }
+  }
+
+  function openPluginSettings(plugin) {
+    if (!plugin || !plugin.installed || !plugin.has_settings) return;
+    if (typeof window.showScreen === "function") {
+      window.showScreen("settings");
+      openSettingsPanel(plugin.id);
+    }
+  }
+
+  function openPluginScreen(plugin) {
+    if (!plugin || !plugin.installed || !plugin.has_screen) return;
+    const screenId = plugin.nav_screen || `plugin-${plugin.id}`;
+    if (typeof window.showScreen !== "function") return;
+
+    if (document.getElementById(screenId)) {
+      window.showScreen(screenId);
+      return;
+    }
+    if (plugin.has_settings) {
+      openPluginSettings(plugin);
+      return;
+    }
+    setBanner(`${plugin.name} is still loading. Try opening it again in a moment.`, "warning");
+  }
+
+  function openInstalledPlugin(plugin) {
+    if (!plugin || !plugin.installed) return;
+    if (plugin.has_settings) openPluginSettings(plugin);
+    else if (plugin.has_screen) openPluginScreen(plugin);
+  }
+
+  function actionButton(label, className, disabled, handler, title = "") {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `plugin-store__button ${className || ""}`.trim();
     button.textContent = label;
     button.disabled = Boolean(disabled);
-    button.addEventListener("click", handler);
+    if (title) button.title = title;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handler(event);
+    });
     return button;
+  }
+
+  function badge(text, kind = "default") {
+    const el = document.createElement("span");
+    el.className = `plugin-store__badge plugin-store__badge--${kind}`;
+    el.textContent = text;
+    return el;
   }
 
   function statusLabel(plugin) {
@@ -154,6 +221,10 @@
         return `Update available: ${plugin.installed_version || "?"} → ${plugin.version}`;
       case "local_newer":
         return `Installed ${plugin.installed_version || "?"} (newer than catalog)`;
+      case "installed_external":
+        return `Installed ${plugin.installed_version || ""} — not managed by this store`.trim();
+      case "incompatible":
+        return "Not compatible with this feedBack version";
       case "broken":
         return "Installed, but manifest validation failed";
       default:
@@ -161,23 +232,46 @@
     }
   }
 
-  async function mutate(plugin, operation) {
-    const key = `${operation}:${plugin.id}`;
+  function thirdPartyInstallWarning(plugin, store) {
+    return [
+      `Install ${plugin.name} from third-party store “${store.name}”?`,
+      "",
+      `Repository: ${plugin.repository}`,
+      "",
+      "This plugin can execute server-side and browser code with feedBack's permissions. Third-party plugins are not reviewed or endorsed by feedBack.",
+      "",
+      "Continue only if you trust this store and repository."
+    ].join("\n");
+  }
+
+  async function mutate(plugin, store, operation) {
+    const key = `${operation}:${store.id}:${plugin.id}`;
     if (state.busy.has(key)) return;
 
-    if (
-      operation === "remove" &&
-      !window.confirm(`Remove ${plugin.name}? The change takes effect after feedBack restarts.`)
-    ) {
-      return;
+    if (operation === "remove") {
+      if (!window.confirm(
+        `Remove ${plugin.name}? The plugin files will be deleted. The change takes effect after feedBack restarts.`
+      )) return;
+    } else if (store.third_party) {
+      if (!window.confirm(thirdPartyInstallWarning(plugin, store))) return;
     }
 
     state.busy.add(key);
+    renderCatalog(state.catalog);
     setBanner(`${operation[0].toUpperCase()}${operation.slice(1)}ing ${plugin.name}…`);
 
     try {
       const method = operation === "remove" ? "DELETE" : "POST";
-      await api(`/${operation}/${encodeURIComponent(plugin.id)}`, { method });
+      const options = { method };
+      if (method === "POST") {
+        options.body = JSON.stringify({
+          acknowledge_third_party: store.third_party === true,
+        });
+      }
+      await api(
+        `/${operation}/${encodeURIComponent(store.id)}/${encodeURIComponent(plugin.id)}`,
+        options
+      );
       state.restartRequired = true;
       syncRestartButton();
       setBanner(
@@ -189,28 +283,66 @@
       setBanner(error.message || String(error), "error");
     } finally {
       state.busy.delete(key);
+      renderCatalog(state.catalog);
     }
   }
 
-  function renderPlugin(plugin) {
+  function renderPlugin(plugin, store) {
     const card = document.createElement("article");
     card.className = "plugin-store__card";
+
+    const canOpenInstalled = plugin.installed && (plugin.has_settings || plugin.has_screen);
+    if (canOpenInstalled) {
+      card.classList.add("plugin-store__card--openable");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute(
+        "aria-label",
+        plugin.has_settings ? `Open ${plugin.name} settings` : `Open ${plugin.name}`
+      );
+      card.addEventListener("click", () => openInstalledPlugin(plugin));
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openInstalledPlugin(plugin);
+        }
+      });
+    }
 
     const body = document.createElement("div");
     body.className = "plugin-store__card-body";
 
-    const title = document.createElement("h2");
+    const titleRow = document.createElement("div");
+    titleRow.className = "plugin-store__title-row";
+    const title = document.createElement("h3");
     title.textContent = plugin.name;
+    titleRow.append(title);
+    if (store.third_party) titleRow.append(badge("THIRD-PARTY", "warning"));
+    body.append(titleRow);
 
     const description = document.createElement("p");
     description.className = "plugin-store__description";
     description.textContent = plugin.description || "No description provided.";
+    body.append(description);
 
     const status = document.createElement("p");
     status.className = `plugin-store__status plugin-store__status--${plugin.status}`;
     status.textContent = statusLabel(plugin);
+    body.append(status);
 
-    body.append(title, description, status);
+    if (store.third_party) {
+      const repo = document.createElement("p");
+      repo.className = "plugin-store__repo";
+      repo.textContent = plugin.repository;
+      body.append(repo);
+    }
+
+    if (plugin.compatibility_reason) {
+      const compatibility = document.createElement("p");
+      compatibility.className = "plugin-store__compatibility";
+      compatibility.textContent = plugin.compatibility_reason;
+      body.append(compatibility);
+    }
 
     if (plugin.error) {
       const error = document.createElement("p");
@@ -223,115 +355,329 @@
     actions.className = "plugin-store__actions";
 
     if (!plugin.installed) {
+      const busy = state.busy.has(`install:${store.id}:${plugin.id}`);
+      const disabled = busy || !plugin.can_install;
       actions.append(
         actionButton(
-          "Install",
+          plugin.compatible === false ? "Incompatible" : "Install",
           "plugin-store__button--primary",
-          state.busy.has(`install:${plugin.id}`),
-          () => mutate(plugin, "install")
+          disabled,
+          () => mutate(plugin, store, "install"),
+          plugin.compatibility_reason || ""
         )
       );
     } else {
       if (plugin.status === "update_available" || plugin.status === "broken") {
+        const busy = state.busy.has(`update:${store.id}:${plugin.id}`);
         actions.append(
           actionButton(
             plugin.status === "broken" ? "Repair" : "Update",
             "plugin-store__button--primary",
-            state.busy.has(`update:${plugin.id}`),
-            () => mutate(plugin, "update")
+            busy || !plugin.can_update,
+            () => mutate(plugin, store, "update"),
+            !plugin.can_update && store.third_party
+              ? "Automatic update is blocked because this install is not managed by this store or is incompatible."
+              : ""
           )
         );
       }
 
-      actions.append(
-        actionButton(
-          "Remove",
-          "plugin-store__button--danger",
-          state.busy.has(`remove:${plugin.id}`),
-          () => mutate(plugin, "remove")
-        )
-      );
+      if (plugin.has_settings) {
+        actions.append(
+          actionButton(
+            "Settings",
+            "plugin-store__button--secondary",
+            false,
+            () => openPluginSettings(plugin)
+          )
+        );
+      }
+      if (plugin.has_screen) {
+        actions.append(
+          actionButton(
+            "Open Plugin",
+            "plugin-store__button--secondary",
+            false,
+            () => openPluginScreen(plugin)
+          )
+        );
+      }
+      if (plugin.can_remove) {
+        const busy = state.busy.has(`remove:${store.id}:${plugin.id}`);
+        actions.append(
+          actionButton(
+            "Remove",
+            "plugin-store__button--danger",
+            busy,
+            () => mutate(plugin, store, "remove")
+          )
+        );
+      }
     }
 
     card.append(body, actions);
     return card;
   }
 
-  async function loadCatalog(forceRefresh = false) {
-    const { list, refresh, source, root } = elements();
+  async function removeThirdPartyStore(store) {
+    const pluginCount = Array.isArray(store.plugins) ? store.plugins.length : 0;
+    if (!window.confirm(
+      `Remove third-party store “${store.name}”?\n\nThis removes the catalog source only. Any plugins already installed from it will remain installed.\n\nCatalog plugins: ${pluginCount}`
+    )) return;
+
+    try {
+      const result = await api(`/stores/${encodeURIComponent(store.id)}`, {
+        method: "DELETE",
+      });
+      const preserved = result.installed_plugins_preserved || [];
+      const suffix = preserved.length
+        ? ` Installed plugins were preserved: ${preserved.join(", ")}.`
+        : "";
+      setBanner(`Removed third-party store “${store.name}”.${suffix}`, "success");
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    }
+  }
+
+  function renderStore(store) {
+    const section = document.createElement("section");
+    section.className = "plugin-store__store";
+    if (store.third_party) section.classList.add("plugin-store__store--third-party");
+
+    const header = document.createElement("div");
+    header.className = "plugin-store__store-header";
+
+    const headingWrap = document.createElement("div");
+    const headingLine = document.createElement("div");
+    headingLine.className = "plugin-store__store-heading-line";
+    const heading = document.createElement("h2");
+    heading.textContent = store.name;
+    headingLine.append(heading);
+    headingLine.append(
+      badge(store.third_party ? "THIRD-PARTY STORE" : "OFFICIAL", store.third_party ? "warning" : "official")
+    );
+    headingWrap.append(headingLine);
+
+    if (store.description) {
+      const description = document.createElement("p");
+      description.className = "plugin-store__store-description";
+      description.textContent = store.description;
+      headingWrap.append(description);
+    }
+
+    if (store.url) {
+      const source = document.createElement("p");
+      source.className = "plugin-store__store-source";
+      source.textContent = store.url;
+      headingWrap.append(source);
+    }
+    header.append(headingWrap);
+
+    if (store.third_party) {
+      header.append(
+        actionButton(
+          "Remove Store",
+          "plugin-store__button--danger",
+          false,
+          () => removeThirdPartyStore(store)
+        )
+      );
+    }
+    section.append(header);
+
+    if (store.third_party) {
+      const risk = document.createElement("div");
+      risk.className = "plugin-store__third-party-notice";
+      risk.textContent =
+        "Third-party plugins are unreviewed and may execute code with feedBack's permissions. Verify the repository before installing.";
+      section.append(risk);
+    }
+
+    if (store.warning) {
+      const warning = document.createElement("div");
+      warning.className = "plugin-store__store-warning";
+      warning.textContent = store.warning;
+      section.append(warning);
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "plugin-store__grid";
+    for (const plugin of store.plugins || []) {
+      grid.append(renderPlugin(plugin, store));
+    }
+    if (!store.plugins || store.plugins.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "plugin-store__loading";
+      empty.textContent = store.warning
+        ? "This store is currently unavailable."
+        : "This store contains no plugins.";
+      grid.append(empty);
+    }
+    section.append(grid);
+    return section;
+  }
+
+  function renderCatalog(data) {
+    if (!data) return;
+    const { list, root, host } = elements();
     if (!list) return;
 
-    refresh && (refresh.disabled = true);
     list.replaceChildren();
+    for (const store of data.stores || []) {
+      list.append(renderStore(store));
+    }
+    if (!data.stores || data.stores.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "plugin-store__loading";
+      empty.textContent = "No plugin stores are configured.";
+      list.append(empty);
+    }
 
-    const loading = document.createElement("div");
-    loading.className = "plugin-store__loading";
-    loading.textContent = forceRefresh ? "Checking registry…" : "Loading plugin catalog…";
-    list.append(loading);
+    if (root) root.textContent = data.plugin_root ? `Install path: ${data.plugin_root}` : "";
+    if (host) {
+      host.textContent = data.host_version
+        ? `feedBack ${data.host_version} · Plugin spec v${data.plugin_spec_major || 1}`
+        : `feedBack version unavailable · Plugin spec v${data.plugin_spec_major || 1}`;
+    }
+  }
+
+  async function loadCatalog(forceRefresh = false) {
+    const { list, refresh } = elements();
+    if (!list) return;
+    if (refresh) refresh.disabled = true;
+
+    if (!state.catalog) {
+      list.replaceChildren();
+      const loading = document.createElement("div");
+      loading.className = "plugin-store__loading";
+      loading.textContent = forceRefresh ? "Checking plugin stores…" : "Loading plugin catalog…";
+      list.append(loading);
+    }
 
     try {
       const data = await api(`/catalog?refresh=${forceRefresh ? "true" : "false"}`);
-      list.replaceChildren();
+      state.catalog = data;
+      renderCatalog(data);
 
-      for (const plugin of data.plugins || []) {
-        list.append(renderPlugin(plugin));
-      }
-
-      if (!data.plugins || data.plugins.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "plugin-store__loading";
-        empty.textContent = "The registry contains no plugins.";
-        list.append(empty);
-      }
-
-      if (source) {
-        const registry = data.registry || {};
-        const label = registry.source_url
-          ? `Registry: ${registry.source}${registry.stale ? " (cached/stale)" : ""}`
-          : "Registry: bundled";
-        source.textContent = label;
-      }
-      if (root) {
-        root.textContent = data.plugin_root ? `Install path: ${data.plugin_root}` : "";
-      }
-
-      if (data.registry && data.registry.warning) {
-        setBanner(data.registry.warning, "warning");
-      } else if (forceRefresh && data.registry) {
-        setBanner(
-          data.registry.changed ? "Registry updated." : "Registry is already current.",
-          "success"
-        );
+      const warnings = (data.stores || [])
+        .filter((store) => store.warning)
+        .map((store) => `${store.name}: ${store.warning}`);
+      if (warnings.length) {
+        setBanner(warnings.join("  "), "warning");
+      } else if (forceRefresh) {
+        setBanner("Plugin stores refreshed.", "success");
       }
     } catch (error) {
-      list.replaceChildren();
-      const failure = document.createElement("div");
-      failure.className = "plugin-store__loading plugin-store__error";
-      failure.textContent = error.message || String(error);
-      list.append(failure);
       setBanner(error.message || String(error), "error");
+      if (!state.catalog) {
+        list.replaceChildren();
+        const failure = document.createElement("div");
+        failure.className = "plugin-store__loading plugin-store__error";
+        failure.textContent = error.message || String(error);
+        list.append(failure);
+      }
     } finally {
-      refresh && (refresh.disabled = false);
+      if (refresh) refresh.disabled = false;
+    }
+  }
+
+  function showAddStoreDialog() {
+    const { dialog, addUrl, addAck, addError } = elements();
+    if (!dialog) return;
+    if (addUrl) addUrl.value = "";
+    if (addAck) addAck.checked = false;
+    if (addError) {
+      addError.hidden = true;
+      addError.textContent = "";
+    }
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    window.setTimeout(() => addUrl && addUrl.focus(), 0);
+  }
+
+  function closeAddStoreDialog() {
+    const { dialog } = elements();
+    if (!dialog) return;
+    if (typeof dialog.close === "function") dialog.close();
+    else dialog.removeAttribute("open");
+  }
+
+  async function submitAddStore(event) {
+    event.preventDefault();
+    const { addUrl, addAck, addSubmit, addError } = elements();
+    const url = addUrl ? addUrl.value.trim() : "";
+    const acknowledged = Boolean(addAck && addAck.checked);
+
+    if (!url || !acknowledged) {
+      if (addError) {
+        addError.hidden = false;
+        addError.textContent = "Enter the YAML URL and acknowledge the third-party plugin warning.";
+      }
+      return;
+    }
+
+    if (addSubmit) addSubmit.disabled = true;
+    if (addError) {
+      addError.hidden = false;
+      addError.textContent = "Checking store YAML and plugin compatibility…";
+    }
+
+    try {
+      const result = await api("/stores", {
+        method: "POST",
+        body: JSON.stringify({ url, acknowledge_risk: true }),
+      });
+      closeAddStoreDialog();
+      setBanner(`Added third-party store “${result.store.name}”.`, "success");
+      await loadCatalog(false);
+    } catch (error) {
+      if (addError) {
+        addError.hidden = false;
+        addError.textContent = error.message || String(error);
+      }
+    } finally {
+      if (addSubmit) addSubmit.disabled = false;
     }
   }
 
   function bind() {
-    const { refresh, restart } = elements();
+    const {
+      refresh, restart, addStore, addForm, addClose, addCancel, dialog,
+    } = elements();
 
     if (refresh && refresh.dataset.pluginStoreBound !== "1") {
       refresh.dataset.pluginStoreBound = "1";
       refresh.addEventListener("click", () => loadCatalog(true));
     }
-
     if (restart && restart.dataset.pluginStoreBound !== "1") {
       restart.dataset.pluginStoreBound = "1";
       restart.addEventListener("click", restartFeedBack);
+    }
+    if (addStore && addStore.dataset.pluginStoreBound !== "1") {
+      addStore.dataset.pluginStoreBound = "1";
+      addStore.addEventListener("click", showAddStoreDialog);
+    }
+    if (addForm && addForm.dataset.pluginStoreBound !== "1") {
+      addForm.dataset.pluginStoreBound = "1";
+      addForm.addEventListener("submit", submitAddStore);
+    }
+    for (const button of [addClose, addCancel]) {
+      if (button && button.dataset.pluginStoreBound !== "1") {
+        button.dataset.pluginStoreBound = "1";
+        button.addEventListener("click", closeAddStoreDialog);
+      }
+    }
+    if (dialog && dialog.dataset.pluginStoreBound !== "1") {
+      dialog.dataset.pluginStoreBound = "1";
+      dialog.addEventListener("click", (event) => {
+        if (event.target === dialog) closeAddStoreDialog();
+      });
     }
 
     syncRestartButton();
   }
 
-  // Re-hydration safe: refresh element references and avoid duplicate listeners.
   bind();
   loadCatalog(false);
 

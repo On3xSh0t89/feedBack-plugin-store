@@ -4,12 +4,15 @@
       <p class="plugin-store__eyebrow">TOOLS</p>
       <h1>Plugin Store</h1>
       <p class="plugin-store__subtitle">
-        Curated plugins from the official got-feedBack GitHub organization.
+        Install official feedBack plugins and optional third-party plugin stores.
       </p>
     </div>
     <div class="plugin-store__header-actions">
       <button id="plugin-store-restart" class="plugin-store__button plugin-store__button--primary" type="button" hidden>
         Restart feedBack
+      </button>
+      <button id="plugin-store-add-store" class="plugin-store__button plugin-store__button--secondary" type="button">
+        Add Third-Party Store
       </button>
       <button id="plugin-store-refresh" class="plugin-store__button plugin-store__button--secondary" type="button">
         Refresh
@@ -20,11 +23,62 @@
   <div id="plugin-store-banner" class="plugin-store__banner" hidden></div>
 
   <div class="plugin-store__meta">
-    <span id="plugin-store-source">Registry: loading…</span>
+    <span id="plugin-store-host">feedBack: checking version…</span>
     <span id="plugin-store-root"></span>
   </div>
 
-  <div id="plugin-store-list" class="plugin-store__grid" aria-live="polite">
+  <div id="plugin-store-list" class="plugin-store__stores" aria-live="polite">
     <div class="plugin-store__loading">Loading plugin catalog…</div>
   </div>
+
+  <dialog id="plugin-store-add-dialog" class="plugin-store__dialog">
+    <form id="plugin-store-add-form" class="plugin-store__dialog-form">
+      <div class="plugin-store__dialog-heading">
+        <h2>Add Third-Party Store</h2>
+        <button id="plugin-store-add-close" class="plugin-store__dialog-close" type="button" aria-label="Close">×</button>
+      </div>
+
+      <div class="plugin-store__warning-box">
+        <strong>Third-party plugins execute code inside feedBack.</strong>
+        <p>
+          A malicious plugin can read or modify files available to the feedBack container,
+          access feedBack data, and make network requests. Third-party stores are not reviewed
+          or endorsed by the feedBack project. Only add a store you trust.
+        </p>
+      </div>
+
+      <label class="plugin-store__field">
+        <span>Store YAML URL</span>
+        <input
+          id="plugin-store-add-url"
+          type="url"
+          inputmode="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="https://github.com/user/repo/blob/main/store.yaml"
+          required
+        >
+      </label>
+
+      <p class="plugin-store__help">
+        v0.2 accepts GitHub-hosted YAML stores. The link is fetched and validated before the store is saved.
+      </p>
+
+      <label class="plugin-store__ack">
+        <input id="plugin-store-add-ack" type="checkbox" required>
+        <span>I understand that plugins from this store may execute untrusted code.</span>
+      </label>
+
+      <div id="plugin-store-add-error" class="plugin-store__dialog-error" hidden></div>
+
+      <div class="plugin-store__dialog-actions">
+        <button id="plugin-store-add-cancel" class="plugin-store__button plugin-store__button--secondary" type="button">
+          Cancel
+        </button>
+        <button id="plugin-store-add-submit" class="plugin-store__button plugin-store__button--danger" type="submit">
+          I Understand — Add Store
+        </button>
+      </div>
+    </form>
+  </dialog>
 </section>

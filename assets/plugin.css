@@ -50,17 +50,22 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px 20px;
-  margin: 12px 0 20px;
+  margin: 12px 0 22px;
   font-size: 0.78rem;
   opacity: 0.62;
   word-break: break-word;
 }
 
 .plugin-store__banner {
+  position: sticky;
+  top: 8px;
+  z-index: 20;
   margin: 14px 0;
-  padding: 11px 14px;
+  padding: 12px 14px;
   border: 1px solid currentColor;
   border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
   font-size: 0.9rem;
 }
 
@@ -76,6 +81,95 @@
   border-color: #b84c4c;
 }
 
+.plugin-store__stores {
+  display: grid;
+  gap: 28px;
+}
+
+.plugin-store__store {
+  padding-top: 2px;
+}
+
+.plugin-store__store--third-party {
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, #b8882d 58%, transparent);
+  border-radius: 14px;
+}
+
+.plugin-store__store-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.plugin-store__store-heading-line,
+.plugin-store__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.plugin-store__store-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.plugin-store__store-description {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+.plugin-store__store-source,
+.plugin-store__repo {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
+  opacity: 0.58;
+}
+
+.plugin-store__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+
+.plugin-store__badge--official {
+  border-color: #3f9b63;
+}
+
+.plugin-store__badge--warning {
+  border-color: #b8882d;
+}
+
+.plugin-store__third-party-notice,
+.plugin-store__store-warning,
+.plugin-store__warning-box {
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border: 1px solid #b8882d;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.plugin-store__store-warning {
+  border-color: #b84c4c;
+}
+
+.plugin-store__warning-box p {
+  margin: 7px 0 0;
+}
+
 .plugin-store__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
@@ -84,7 +178,7 @@
 
 .plugin-store__card {
   display: flex;
-  min-height: 190px;
+  min-height: 200px;
   flex-direction: column;
   justify-content: space-between;
   gap: 18px;
@@ -94,7 +188,21 @@
   background: color-mix(in srgb, currentColor 4%, transparent);
 }
 
-.plugin-store__card h2 {
+.plugin-store__card--openable {
+  cursor: pointer;
+}
+
+.plugin-store__card--openable:hover {
+  border-color: color-mix(in srgb, currentColor 32%, transparent);
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.plugin-store__card--openable:focus-visible {
+  outline: 2px solid #4d8fd8;
+  outline-offset: 2px;
+}
+
+.plugin-store__card h3 {
   margin: 0;
   font-size: 1.08rem;
 }
@@ -110,16 +218,25 @@
 .plugin-store__status {
   margin: 0;
   font-size: 0.78rem;
-  font-weight: 600;
-  opacity: 0.8;
+  font-weight: 650;
+  opacity: 0.82;
 }
 
 .plugin-store__status--update_available {
   opacity: 1;
 }
 
-.plugin-store__error {
+.plugin-store__status--incompatible,
+.plugin-store__compatibility,
+.plugin-store__error,
+.plugin-store__dialog-error {
   color: #d66;
+}
+
+.plugin-store__compatibility {
+  margin: 7px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .plugin-store__actions {
@@ -147,8 +264,8 @@
 }
 
 .plugin-store__button:disabled {
-  cursor: wait;
-  opacity: 0.5;
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .plugin-store__button--primary {
@@ -165,18 +282,115 @@
   opacity: 0.7;
 }
 
+.plugin-store__dialog {
+  width: min(620px, calc(100vw - 28px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 14px;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.plugin-store__dialog::backdrop {
+  background: rgb(0 0 0 / 0.58);
+}
+
+.plugin-store__dialog-form {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.plugin-store__dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plugin-store__dialog-heading h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.plugin-store__dialog-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.plugin-store__field {
+  display: grid;
+  gap: 7px;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.plugin-store__field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+.plugin-store__help {
+  margin: -6px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  opacity: 0.68;
+}
+
+.plugin-store__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.plugin-store__ack input {
+  margin-top: 3px;
+}
+
+.plugin-store__dialog-error {
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.plugin-store__dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 640px) {
   #plugin-store-app.plugin-store {
     width: min(100% - 20px, 1180px);
     padding-top: 20px;
   }
 
-  .plugin-store__header {
+  .plugin-store__header,
+  .plugin-store__store-header {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .plugin-store__header-actions {
+  .plugin-store__header-actions,
+  .plugin-store__dialog-actions {
     justify-content: flex-start;
+  }
+
+  .plugin-store__store--third-party {
+    padding: 13px;
   }
 }

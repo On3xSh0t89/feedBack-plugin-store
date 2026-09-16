@@ -1,17 +1,17 @@
 <section id="plugin-store-settings">
   <p>
-    Plugin Store installs only curated repositories from the official
-    <strong>got-feedBack</strong> GitHub organization.
+    Plugin Store manages the official <strong>got-feedBack</strong> plugin catalog and
+    optional third-party stores that you explicitly add.
   </p>
   <p>
-    When this plugin is installed with <code>git clone</code>, it automatically
-    checks the <code>registry.yaml</code> from its own GitHub origin. ZIP installs
-    use the bundled registry unless <code>FEEDBACK_PLUGIN_STORE_REGISTRY_URL</code>
-    is configured.
+    Third-party stores are unreviewed. Their plugins can execute server-side Python
+    and browser JavaScript with feedBack's permissions. Plugin Store validates store
+    structure, repository manifests, ids/versions, and <code>minHost</code> compatibility,
+    but that validation is not a malware scan.
   </p>
   <p>
-    Plugin changes are written to <code>FEEDBACK_PLUGINS_DIR</code>. After a
-    change, Plugin Store can restart feedBack by terminating the application
-    process; Docker will start it again when a restart policy is configured.
+    Plugin changes are written to <code>FEEDBACK_PLUGINS_DIR</code>. After a lifecycle
+    change, Plugin Store can restart feedBack by terminating the application process;
+    Docker or another supervisor must be configured to start it again.
   </p>
 </section>

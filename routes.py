@@ -6,13 +6,13 @@ plugin specification. All setup happens inside setup().
 
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import signal
 import threading
 import uuid
+from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 
 
 PLUGIN_ID = "plugin_store"
@@ -24,7 +24,6 @@ def setup(app: FastAPI, context: dict) -> None:
     log = context["log"]
     load_sibling = context["load_sibling"]
 
-    # Validate everything before mounting the first route.
     storelib = load_sibling("storelib")
     try:
         store = storelib.PluginStore(
@@ -33,25 +32,22 @@ def setup(app: FastAPI, context: dict) -> None:
             log=log,
         )
     except storelib.StoreError as exc:
-        # Do not partially register a broken management surface.
-        log.error(
-            "plugin_store_setup_failed",
-            extra={"error": exc.message},
-        )
+        log.error("plugin_store_setup_failed", extra={"error": exc.message})
         raise RuntimeError(exc.message) from exc
 
     def fail(exc):
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     def require_mutation_header(value: str | None) -> None:
-        # This custom header forces cross-origin browser requests through CORS
-        # preflight instead of allowing a plain HTML form to mutate plugin state.
+        # This non-simple header forces cross-origin browser requests through a
+        # CORS preflight instead of allowing a plain cross-site HTML form to
+        # mutate plugin/store state.
         if value != "1":
-            raise HTTPException(status_code=403, detail="Missing Plugin Store request header.")
+            raise HTTPException(
+                status_code=403,
+                detail="Missing Plugin Store request header.",
+            )
 
-    # Unique for this Python process. The frontend uses this to distinguish the
-    # restarted feedBack instance from the old one without relying on a visible
-    # outage window.
     instance_id = uuid.uuid4().hex
 
     @app.get(f"{API_PREFIX}/instance")
@@ -71,18 +67,12 @@ def setup(app: FastAPI, context: dict) -> None:
             )
             os.kill(os.getpid(), signal.SIGTERM)
 
-        # Return HTTP 200 first, then terminate feedBack. In Docker deployments
-        # with restart: unless-stopped/always, Docker will start the container
-        # again. No Docker socket access is required.
+        # Let the HTTP response reach the browser before terminating feedBack.
+        # Docker's restart policy/supervisor is responsible for bringing it back.
         timer = threading.Timer(1.0, terminate_process)
         timer.daemon = True
         timer.start()
-
-        return {
-            "ok": True,
-            "restarting": True,
-            "instance_id": instance_id,
-        }
+        return {"ok": True, "restarting": True, "instance_id": instance_id}
 
     @app.get(f"{API_PREFIX}/catalog")
     def get_catalog(refresh: bool = Query(default=False)):
@@ -91,8 +81,85 @@ def setup(app: FastAPI, context: dict) -> None:
         except storelib.StoreError as exc:
             fail(exc)
 
+    @app.post(f"{API_PREFIX}/stores")
+    def add_store(
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.add_store(
+                str(payload.get("url", "")),
+                acknowledge_risk=payload.get("acknowledge_risk") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.delete(f"{API_PREFIX}/stores/{{store_id}}")
+    def remove_store(
+        store_id: str,
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.remove_store(store_id)
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    # v0.2 routes include an explicit store id so two catalogs can never be
+    # ambiguous about which repository is being installed.
+    @app.post(f"{API_PREFIX}/install/{{store_id}}/{{plugin_id}}")
+    def install_plugin_from_store(
+        store_id: str,
+        plugin_id: str,
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.install(
+                plugin_id,
+                replace=False,
+                store_id=store_id,
+                acknowledge_third_party=payload.get("acknowledge_third_party") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.post(f"{API_PREFIX}/update/{{store_id}}/{{plugin_id}}")
+    def update_plugin_from_store(
+        store_id: str,
+        plugin_id: str,
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.install(
+                plugin_id,
+                replace=True,
+                store_id=store_id,
+                acknowledge_third_party=payload.get("acknowledge_third_party") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.delete(f"{API_PREFIX}/remove/{{store_id}}/{{plugin_id}}")
+    def remove_plugin_from_store(
+        store_id: str,
+        plugin_id: str,
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.remove(plugin_id, store_id=store_id)
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    # Keep the original v0.1 API working for callers that only know about the
+    # official registry.
     @app.post(f"{API_PREFIX}/install/{{plugin_id}}")
-    def install_plugin(
+    def install_official_plugin(
         plugin_id: str,
         x_feedback_plugin_store: str | None = Header(default=None),
     ):
@@ -103,7 +170,7 @@ def setup(app: FastAPI, context: dict) -> None:
             fail(exc)
 
     @app.post(f"{API_PREFIX}/update/{{plugin_id}}")
-    def update_plugin(
+    def update_official_plugin(
         plugin_id: str,
         x_feedback_plugin_store: str | None = Header(default=None),
     ):
@@ -114,7 +181,7 @@ def setup(app: FastAPI, context: dict) -> None:
             fail(exc)
 
     @app.delete(f"{API_PREFIX}/remove/{{plugin_id}}")
-    def remove_plugin(
+    def remove_official_plugin(
         plugin_id: str,
         x_feedback_plugin_store: str | None = Header(default=None),
     ):

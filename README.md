@@ -245,3 +245,5 @@ python -m py_compile routes.py storelib.py
 ## License
 
 AGPL-3.0-only
+
+- Self-update now force-refreshes Plugin Store frontend assets after restart to avoid stale `screen.html` / `screen.js` on older feedBack builds.

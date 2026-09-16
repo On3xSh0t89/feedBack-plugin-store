@@ -220,6 +220,65 @@
     return false;
   }
 
+  async function refreshPluginStoreFrontendAssets(expectedVersion) {
+    // Some feedBack builds keep plugin screen HTML / classic JS cached across
+    // a backend restart. Force-refresh the exact URLs the host loader uses so
+    // the subsequent full-page navigation cannot resurrect the old Plugin
+    // Store frontend from HTTP cache.
+    const urls = [
+      "/api/plugins/plugin_store/screen.html",
+      "/api/plugins/plugin_store/screen.js",
+      "/api/plugins/plugin_store/settings.html",
+      "/api/plugins/plugin_store/assets/plugin.css",
+    ];
+
+    // Wait briefly for the restarted backend to report the expected plugin
+    // version before refreshing assets. Plugin registration is incremental.
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`/api/plugins?_=${Date.now()}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (response.ok) {
+          const plugins = await response.json();
+          const self = Array.isArray(plugins)
+            ? plugins.find((plugin) => plugin && plugin.id === "plugin_store")
+            : null;
+          if (!expectedVersion || (self && self.version === expectedVersion)) {
+            break;
+          }
+        }
+      } catch (_) {
+        // Backend may still be completing plugin registration.
+      }
+      await sleep(500);
+    }
+
+    await Promise.allSettled(
+      urls.map((url) =>
+        fetch(url, {
+          method: "GET",
+          cache: "reload",
+          credentials: "same-origin",
+          headers: {
+            "Cache-Control": "no-cache",
+          },
+        })
+      )
+    );
+  }
+
+  function hardReloadAfterSelfUpdate(version) {
+    const url = new URL(window.location.href);
+    url.searchParams.set(
+      "_plugin_store_reload",
+      `${version || "updated"}-${Date.now()}`
+    );
+    window.location.replace(url.toString());
+  }
+
   async function updatePluginStore() {
     if (state.selfUpdating || state.restarting) return;
 
@@ -246,9 +305,9 @@
 
       const restarted = await waitForNewInstance(result.instance_id);
       if (restarted) {
-        setBanner("feedBack is back. Reloading…", "success");
-        await sleep(250);
-        window.location.reload();
+        setBanner("feedBack is back. Refreshing Plugin Store assets…", "success");
+        await refreshPluginStoreFrontendAssets(result.version);
+        hardReloadAfterSelfUpdate(result.version);
         return;
       }
 

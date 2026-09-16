@@ -26,13 +26,11 @@
       <strong id="plugin-store-update-title">Plugin Store update available</strong>
       <div id="plugin-store-update-detail" class="plugin-store__update-detail"></div>
     </div>
-    <a
+    <button
       id="plugin-store-update-link"
       class="plugin-store__button plugin-store__button--primary"
-      href="https://github.com/irnutsmurt/feedBack-plugin-store"
-      target="_blank"
-      rel="noopener noreferrer"
-    >View Update</a>
+      type="button"
+    >Update Plugin Store</button>
   </div>
 
   <div id="plugin-store-banner" class="plugin-store__banner" hidden></div>
@@ -42,6 +40,12 @@
     <span id="plugin-store-root"></span>
   </div>
 
+
+  <div id="plugin-store-summary" class="plugin-store__summary" aria-live="polite">
+    <span><strong id="plugin-store-summary-installed">0</strong> Installed</span>
+    <span><strong id="plugin-store-summary-updates">0</strong> Updates</span>
+    <span><strong id="plugin-store-summary-available">0</strong> Available</span>
+  </div>
 
   <div class="plugin-store__toolbar">
     <label class="plugin-store__search">

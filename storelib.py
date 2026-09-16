@@ -49,7 +49,7 @@ DEFAULT_MAX_FILES = 10000
 DEFAULT_BACKUPS_PER_PLUGIN = 2
 MAX_BACKUPS_PER_PLUGIN = 10
 
-USER_AGENT = "feedBack-plugin-store/0.3.0"
+USER_AGENT = "feedBack-plugin-store/0.3.1"
 SELF_UPDATE_CACHE_SECONDS = 300
 MAX_SELF_MANIFEST_BYTES = 128 * 1024
 
@@ -853,6 +853,171 @@ class PluginStore:
             },
         )
         return result
+
+    def install_self_update(self) -> dict[str, Any]:
+        """Download, validate, and atomically replace the Plugin Store itself.
+
+        The currently loaded Python module remains alive until feedBack exits.
+        routes.py schedules that restart only after this transaction succeeds.
+        """
+        status = self.self_update_status(force=True)
+        if not status.get("update_available"):
+            raise StoreError("No Plugin Store update is currently available.", 409)
+
+        expected_version = str(status.get("available_version") or "")
+        if not SEMVER_RE.fullmatch(expected_version):
+            raise StoreError("The available Plugin Store version is invalid.", 502)
+
+        local_manifest = self._local_store_manifest()
+        local_version = str(local_manifest.get("version") or "")
+        if not SEMVER_RE.fullmatch(local_version):
+            raise StoreError("The installed Plugin Store version is invalid.", 500)
+        if compare_versions(local_version, expected_version) >= 0:
+            raise StoreError("No newer Plugin Store version is available.", 409)
+
+        homepage = str(local_manifest.get("homepage") or "").strip()
+        parsed = parse_https_github_repo(homepage)
+        if not parsed:
+            raise StoreError(
+                "Plugin Store homepage is not a supported HTTPS GitHub repository URL.",
+                500,
+            )
+        owner, repo = parsed
+        owner_q = urllib.parse.quote(owner, safe="")
+        repo_q = urllib.parse.quote(repo, safe="")
+        archive_url = (
+            f"https://codeload.github.com/{owner_q}/{repo_q}/zip/refs/heads/main"
+        )
+
+        if self.plugin_dir.is_symlink():
+            raise StoreError("Refusing to self-update a symlinked Plugin Store directory.", 409)
+        if not self.plugin_dir.is_dir():
+            raise StoreError("Plugin Store directory is unavailable.", 500)
+
+        operation_id = uuid.uuid4().hex
+        work_dir = self.tmp_dir / f"self-update-{operation_id}"
+        archive = work_dir / "plugin-store.zip"
+        extracted = work_dir / "extracted"
+        parent = self.plugin_dir.parent
+        staging = parent / f".plugin_store-self-update-staging-{operation_id}"
+        displaced = parent / f".plugin_store-self-update-old-{operation_id}"
+        ensure_within(work_dir, self.state_dir)
+        ensure_within(staging, parent)
+        ensure_within(displaced, parent)
+        work_dir.mkdir(parents=True, exist_ok=False)
+
+        try:
+            request = urllib.request.Request(
+                archive_url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/zip, application/octet-stream;q=0.9, */*;q=0.1",
+                },
+            )
+            downloaded = 0
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response, archive.open("wb") as fh:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        downloaded += len(chunk)
+                        if downloaded > self.max_archive_bytes:
+                            raise StoreError(
+                                "Plugin Store update archive exceeds the configured download safety limit.",
+                                413,
+                            )
+                        fh.write(chunk)
+            except StoreError:
+                raise
+            except urllib.error.HTTPError as exc:
+                raise StoreError(
+                    f"GitHub returned HTTP {exc.code} while downloading the Plugin Store update.",
+                    502,
+                ) from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise StoreError(f"Plugin Store update download failed: {exc}", 502) from exc
+
+            safe_extract_zip(
+                archive,
+                extracted,
+                max_extract_bytes=self.max_extract_bytes,
+                max_files=self.max_files,
+            )
+            source_root = locate_plugin_root(extracted)
+            remote_manifest = read_plugin_manifest(source_root)
+            validation = validate_plugin_manifest(
+                remote_manifest,
+                plugin_root=source_root,
+                host_version=self.host_version,
+            )
+            if validation["id"] != "plugin_store":
+                raise StoreError("Downloaded update is not the Plugin Store.", 422)
+            if validation["version"] != expected_version:
+                raise StoreError(
+                    "Downloaded Plugin Store version does not match the version advertised by GitHub.",
+                    409,
+                )
+            if not validation["compatible"]:
+                raise StoreError(
+                    f"Plugin Store update is not compatible with this feedBack Host: {validation['compatibility_reason']}",
+                    409,
+                )
+
+            remote_homepage = str(remote_manifest.get("homepage") or "").strip()
+            if parse_github_repo(remote_homepage) != parse_github_repo(homepage):
+                raise StoreError("Downloaded Plugin Store repository identity changed unexpectedly.", 409)
+
+            if staging.exists():
+                shutil.rmtree(staging)
+            shutil.copytree(source_root, staging, symlinks=False)
+
+            # Keep the old directory until the replacement is in place. If the
+            # second rename fails, restore it immediately.
+            os.replace(self.plugin_dir, displaced)
+            try:
+                os.replace(staging, self.plugin_dir)
+            except Exception:
+                if displaced.exists() and not self.plugin_dir.exists():
+                    os.replace(displaced, self.plugin_dir)
+                raise
+
+            shutil.rmtree(displaced, ignore_errors=True)
+            atomic_write_json(
+                self.state_dir / "self-update.json",
+                {
+                    "checked_at": time.time(),
+                    "remote_version": expected_version,
+                    "etag": None,
+                    "last_modified": None,
+                    "warning": None,
+                },
+            )
+
+            self.log.info(
+                "plugin_store_self_update_complete",
+                extra={
+                    "from_version": local_version,
+                    "to_version": expected_version,
+                    "repository": homepage,
+                },
+            )
+            return {
+                "ok": True,
+                "operation": "self_update",
+                "from_version": local_version,
+                "version": expected_version,
+                "restart_required": True,
+            }
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            if work_dir.exists():
+                shutil.rmtree(work_dir, ignore_errors=True)
+            # A failed replacement should normally restore this above. Do not
+            # delete a displaced old copy if the live directory is missing.
+            if displaced.exists() and self.plugin_dir.exists():
+                shutil.rmtree(displaced, ignore_errors=True)
 
     def _bundled_registry(self) -> dict[str, Any]:
         text = (self.plugin_dir / "registry.yaml").read_text(encoding="utf-8")

@@ -13,6 +13,7 @@ A plugin manager for [feedBack](https://github.com/got-feedBack/feedBack), maint
 - Offers an in-app feedBack restart after a plugin lifecycle change.
 - Supports optional, clearly-labelled **third-party stores** hosted as YAML on GitHub.
 - Searches and filters plugins by installed/update/available state.
+- Shows live Installed / Updates / Available catalog counts above the search controls.
 - Supports **Update All** with a single restart after the batch completes.
 - Creates bounded pre-update rollback snapshots and exposes **Roll Back** from the plugin card.
 - Uses conditional HTTP requests (`ETag` / `If-None-Match`) and local cache files so unchanged catalogs are not repeatedly downloaded.

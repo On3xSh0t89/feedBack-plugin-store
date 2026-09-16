@@ -54,12 +54,7 @@ def setup(app: FastAPI, context: dict) -> None:
     def get_instance():
         return {"instance_id": instance_id}
 
-    @app.post(f"{API_PREFIX}/restart")
-    def restart_feedback(
-        x_feedback_plugin_store: str | None = Header(default=None),
-    ):
-        require_mutation_header(x_feedback_plugin_store)
-
+    def schedule_restart() -> None:
         def terminate_process():
             log.info(
                 "plugin_store_restart_requested",
@@ -72,6 +67,13 @@ def setup(app: FastAPI, context: dict) -> None:
         timer = threading.Timer(1.0, terminate_process)
         timer.daemon = True
         timer.start()
+
+    @app.post(f"{API_PREFIX}/restart")
+    def restart_feedback(
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        schedule_restart()
         return {"ok": True, "restarting": True, "instance_id": instance_id}
 
     @app.get(f"{API_PREFIX}/self-update")
@@ -80,6 +82,22 @@ def setup(app: FastAPI, context: dict) -> None:
             return store.self_update_status(force=refresh)
         except storelib.StoreError as exc:
             fail(exc)
+
+    @app.post(f"{API_PREFIX}/self-update/install")
+    def install_self_update(
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            result = store.install_self_update()
+        except storelib.StoreError as exc:
+            fail(exc)
+        schedule_restart()
+        return {
+            **result,
+            "restarting": True,
+            "instance_id": instance_id,
+        }
 
     @app.get(f"{API_PREFIX}/catalog")
     def get_catalog(refresh: bool = Query(default=False)):

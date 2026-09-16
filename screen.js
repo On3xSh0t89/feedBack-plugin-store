@@ -10,6 +10,7 @@
     restarting: false,
     catalog: null,
     sidebarObserver: null,
+    selfUpdating: false,
     searchQuery: "",
     filter: "all",
   };
@@ -29,6 +30,9 @@
       search: document.getElementById("plugin-store-search"),
       filters: document.getElementById("plugin-store-filters"),
       updateAll: document.getElementById("plugin-store-update-all"),
+      summaryInstalled: document.getElementById("plugin-store-summary-installed"),
+      summaryUpdates: document.getElementById("plugin-store-summary-updates"),
+      summaryAvailable: document.getElementById("plugin-store-summary-available"),
       addStore: document.getElementById("plugin-store-add-store"),
       root: document.getElementById("plugin-store-root"),
       host: document.getElementById("plugin-store-host"),
@@ -125,10 +129,13 @@
       }
       if (updateDetail) {
         updateDetail.textContent =
-          `You are running ${installed}. Update the Plugin Store from GitHub, then restart feedBack.`;
+          `You are running ${installed}. Update and restart feedBack to apply ${available}.`;
       }
-      if (updateLink && status.homepage) {
-        updateLink.href = status.homepage;
+      if (updateLink) {
+        updateLink.disabled = state.selfUpdating;
+        updateLink.textContent = state.selfUpdating
+          ? "Updating…"
+          : "Update Plugin Store";
       }
 
       updateBanner.hidden = false;
@@ -213,9 +220,57 @@
     return false;
   }
 
-  async function restartFeedBack() {
+  async function updatePluginStore() {
+    if (state.selfUpdating || state.restarting) return;
+
+    state.selfUpdating = true;
+    const { updateLink } = elements();
+    if (updateLink) {
+      updateLink.disabled = true;
+      updateLink.textContent = "Updating…";
+    }
+    setBanner(
+      "Downloading and validating the Plugin Store update…",
+      "info"
+    );
+
+    try {
+      const result = await api("/self-update/install", { method: "POST" });
+      state.restarting = true;
+      syncRestartButton();
+      if (updateLink) updateLink.textContent = "Restarting…";
+      setBanner(
+        `Plugin Store ${result.version || "update"} installed. Restarting feedBack…`,
+        "success"
+      );
+
+      const restarted = await waitForNewInstance(result.instance_id);
+      if (restarted) {
+        setBanner("feedBack is back. Reloading…", "success");
+        await sleep(250);
+        window.location.reload();
+        return;
+      }
+
+      setBanner(
+        "The Plugin Store was updated, but feedBack did not return within 60 seconds. Check the container restart policy and logs.",
+        "error"
+      );
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+      state.selfUpdating = false;
+      state.restarting = false;
+      syncRestartButton();
+      if (updateLink) {
+        updateLink.disabled = false;
+        updateLink.textContent = "Update Plugin Store";
+      }
+    }
+  }
+
+  async function restartFeedBack(confirmRestart = true) {
     if (state.restarting) return;
-    if (!window.confirm(
+    if (confirmRestart && !window.confirm(
       "Restart feedBack now? The page will wait for the container to return and then reload automatically."
     )) return;
 
@@ -342,6 +397,52 @@
       .toLowerCase();
 
     return haystack.includes(query);
+  }
+
+  function catalogSummary(data) {
+    const seen = new Map();
+
+    for (const store of (data && data.stores) || []) {
+      for (const plugin of store.plugins || []) {
+        if (!plugin || !plugin.id) continue;
+
+        // Prefer an installed/update entry when duplicate ids appear across stores.
+        const existing = seen.get(plugin.id);
+        if (
+          !existing ||
+          plugin.installed ||
+          plugin.status === "update_available"
+        ) {
+          seen.set(plugin.id, plugin);
+        }
+      }
+    }
+
+    let installed = 0;
+    let updates = 0;
+    let available = 0;
+
+    for (const plugin of seen.values()) {
+      if (plugin.installed) installed += 1;
+      if (plugin.status === "update_available" && plugin.can_update) updates += 1;
+      if (!plugin.installed && plugin.can_install) available += 1;
+    }
+
+    return { installed, updates, available };
+  }
+
+  function renderCatalogSummary(data) {
+    const {
+      summaryInstalled,
+      summaryUpdates,
+      summaryAvailable,
+    } = elements();
+
+    const summary = catalogSummary(data);
+
+    if (summaryInstalled) summaryInstalled.textContent = String(summary.installed);
+    if (summaryUpdates) summaryUpdates.textContent = String(summary.updates);
+    if (summaryAvailable) summaryAvailable.textContent = String(summary.available);
   }
 
   function availableUpdates(data) {
@@ -817,6 +918,7 @@
       }
     }
     syncUpdateAllButton();
+    renderCatalogSummary(data);
 
     if (root) root.textContent = data.plugin_root ? `Install path: ${data.plugin_root}` : "";
     if (host) {
@@ -928,9 +1030,13 @@
   function bind() {
     const {
       refresh, restart, addStore, addForm, addClose, addCancel, dialog,
-      search, filters, updateAll,
+      search, filters, updateAll, updateLink,
     } = elements();
 
+    if (updateLink && updateLink.dataset.pluginStoreBound !== "1") {
+      updateLink.dataset.pluginStoreBound = "1";
+      updateLink.addEventListener("click", updatePluginStore);
+    }
     if (refresh && refresh.dataset.pluginStoreBound !== "1") {
       refresh.dataset.pluginStoreBound = "1";
       refresh.addEventListener("click", () => {

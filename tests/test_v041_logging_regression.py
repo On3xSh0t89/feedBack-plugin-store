@@ -25,7 +25,7 @@ class Dummy:
 
 def test_manifest_is_v041():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.4.2"
+    assert manifest["version"] == "0.4.3"
 
 
 def test_safe_info_logging_cannot_raise():

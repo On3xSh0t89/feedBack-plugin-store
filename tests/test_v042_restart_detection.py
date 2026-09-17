@@ -16,7 +16,7 @@ SPEC.loader.exec_module(routes)
 
 def test_manifest_is_v042():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.4.2"
+    assert manifest["version"] == "0.4.3"
 
 
 def test_docker_detection_wins_in_auto_mode():

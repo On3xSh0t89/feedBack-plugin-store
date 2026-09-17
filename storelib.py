@@ -698,6 +698,15 @@ class PluginStore:
         self.direct_cache_dir.mkdir(parents=True, exist_ok=True)
         self.plugin_root.mkdir(parents=True, exist_ok=True)
 
+    def _log_info(self, *args: Any, **kwargs: Any) -> None:
+        """Logging must never change the outcome of a completed store mutation."""
+        try:
+            self.log.info(*args, **kwargs)
+        except Exception:
+            # A logging formatter/adapter may reject extra fields. Store state is
+            # more important than observability, so never turn success into HTTP 500.
+            pass
+
     # ---------- low-level network/cache ----------
 
     def _fetch_text(
@@ -1003,7 +1012,7 @@ class PluginStore:
                 },
             )
 
-            self.log.info(
+            self._log_info(
                 "plugin_store_self_update_complete",
                 extra={
                     "from_version": local_version,
@@ -1558,9 +1567,9 @@ class PluginStore:
         }
         stores.append(config)
         self._save_stores(stores)
-        self.log.info(
+        self._log_info(
             "plugin_store_third_party_added",
-            extra={"store_id": store_id, "url": normalized, "name": config["name"]},
+            extra={"store_id": store_id, "url": normalized, "store_name": config["name"]},
         )
         return {"ok": True, "store": config}
 
@@ -1584,7 +1593,7 @@ class PluginStore:
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=True)
 
-        self.log.info(
+        self._log_info(
             "plugin_store_third_party_removed",
             extra={"store_id": store_id, "preserved_plugins": preserved},
         )
@@ -1773,7 +1782,7 @@ class PluginStore:
                 managed.pop(plugin_id, None)
             self._save_managed(managed)
 
-            self.log.info(
+            self._log_info(
                 "plugin_store_rollback_complete",
                 extra={
                     "plugin_id": plugin_id,
@@ -2258,7 +2267,7 @@ class PluginStore:
             self._save_managed(managed)
             update_committed = True
 
-            self.log.info(
+            self._log_info(
                 "plugin_store_install_complete",
                 extra={
                     "plugin_id": plugin_id,
@@ -2719,7 +2728,7 @@ class PluginStore:
         except FileNotFoundError:
             pass
 
-        self.log.info(
+        self._log_info(
             "plugin_store_remove_complete",
             extra={"plugin_id": plugin_id, "store_id": store_id},
         )

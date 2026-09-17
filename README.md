@@ -299,3 +299,5 @@ Some package-manager UX ideas in v0.4 — per-plugin checks, exclusions, direct
 GitHub installs, and version selection — were independently implemented after
 reviewing [masc0t/slopsmith-update-manager](https://github.com/masc0t/slopsmith-update-manager).
 No source code from that project is included here.
+
+- Fixes third-party store adds returning HTTP 500 after successful persistence due to Python logging's reserved `name` field.

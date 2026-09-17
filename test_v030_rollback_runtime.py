@@ -114,7 +114,7 @@ def test_rollback_works_with_retention_one(tmp_path, monkeypatch):
 
 def test_install_marks_success_so_rollback_snapshot_is_retained():
     src = (ROOT / "storelib.py").read_text(encoding="utf-8")
-    install = src[src.index("    def install("):src.index("    def update_all(", src.index("    def install("))]
+    install = src[src.index("    def _install_entry("):src.index("    def install(", src.index("    def _install_entry("))]
     assert "update_committed = False" in install
     assert "self._save_managed(managed)\n            update_committed = True" in install
     assert "not update_committed" in install

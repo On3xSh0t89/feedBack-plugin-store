@@ -1,7 +1,7 @@
 {
   "id": "plugin_store",
   "name": "Plugin Store",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Browse, install, update, pin, roll back, and manage official feedBack plugins plus optional third-party sources.",
   "type": "tool",
   "category": "tools",

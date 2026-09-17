@@ -11,6 +11,9 @@
       <button id="plugin-store-restart" class="plugin-store__button plugin-store__button--primary" type="button" hidden>
         Restart feedBack
       </button>
+      <button id="plugin-store-install-github" class="plugin-store__button plugin-store__button--secondary" type="button">
+        Install from GitHub
+      </button>
       <button id="plugin-store-add-store" class="plugin-store__button plugin-store__button--secondary" type="button">
         Add Third-Party Store
       </button>
@@ -130,4 +133,68 @@
       </div>
     </form>
   </dialog>
+
+
+  <dialog id="plugin-store-github-dialog" class="plugin-store__dialog">
+    <form id="plugin-store-github-form" class="plugin-store__dialog-form">
+      <div class="plugin-store__dialog-heading">
+        <h2>Install from GitHub</h2>
+        <button id="plugin-store-github-close" class="plugin-store__dialog-close" type="button" aria-label="Close">×</button>
+      </div>
+
+      <div class="plugin-store__warning-box">
+        <strong>Direct GitHub installs are third-party code.</strong>
+        <p>
+          Plugin Store validates plugin.json, feedBack compatibility, archive paths, and download limits,
+          but it cannot determine whether plugin code is trustworthy. Only install repositories you trust.
+        </p>
+      </div>
+
+      <label class="plugin-store__field">
+        <span>GitHub repository</span>
+        <input
+          id="plugin-store-github-url"
+          type="url"
+          inputmode="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="https://github.com/owner/feedBack-plugin-example"
+          required
+        >
+      </label>
+
+      <label class="plugin-store__ack">
+        <input id="plugin-store-github-ack" type="checkbox" required>
+        <span>I understand that this plugin may execute untrusted code inside feedBack.</span>
+      </label>
+
+      <div id="plugin-store-github-error" class="plugin-store__dialog-error" hidden></div>
+
+      <div class="plugin-store__dialog-actions">
+        <button id="plugin-store-github-cancel" class="plugin-store__button plugin-store__button--secondary" type="button">
+          Cancel
+        </button>
+        <button id="plugin-store-github-submit" class="plugin-store__button plugin-store__button--danger" type="submit">
+          Validate & Install
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="plugin-store-versions-dialog" class="plugin-store__dialog plugin-store__dialog--wide">
+    <div class="plugin-store__dialog-form">
+      <div class="plugin-store__dialog-heading">
+        <div>
+          <h2 id="plugin-store-versions-title">Plugin Versions</h2>
+          <p id="plugin-store-versions-repo" class="plugin-store__help"></p>
+        </div>
+        <button id="plugin-store-versions-close" class="plugin-store__dialog-close" type="button" aria-label="Close">×</button>
+      </div>
+
+      <div id="plugin-store-versions-list" class="plugin-store__versions-list">
+        <div class="plugin-store__loading">Loading versions…</div>
+      </div>
+    </div>
+  </dialog>
+
 </section>

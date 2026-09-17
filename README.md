@@ -16,6 +16,10 @@ A plugin manager for [feedBack](https://github.com/got-feedBack/feedBack), maint
 - Shows live Installed / Updates / Available catalog counts above the search controls.
 - Supports **Update All** with a single restart after the batch completes.
 - Creates bounded pre-update rollback snapshots and exposes **Roll Back** from the plugin card.
+- Offers per-plugin **Check** without forcing a full catalog refresh.
+- Lets installed plugins be excluded from **Update All** while keeping manual updates available.
+- Supports advanced **Install from GitHub** for public repositories, with the same archive/manifest safety validation and explicit third-party acknowledgement.
+- Shows tagged GitHub versions on demand and can install/switch to a verified older release, creating a rollback snapshot first when replacing an installed plugin.
 - Uses conditional HTTP requests (`ETag` / `If-None-Match`) and local cache files so unchanged catalogs are not repeatedly downloaded.
 
 The bundled official registry is generated from the public repositories under the `got-feedBack` organization and each plugin repository's actual `plugin.json`. Repositories marked `private: true`, forks, and non-runtime repositories such as `feedBack-plugin-spec` are not offered.
@@ -88,6 +92,41 @@ python tools/sync_registry.py
 ```
 
 An optional `GITHUB_TOKEN` can be supplied to avoid anonymous GitHub API rate limits.
+
+## Direct GitHub installs
+
+The **Install from GitHub** action is an advanced third-party path for plugins
+that are not present in the official registry or one of your configured YAML
+stores.
+
+Paste a public repository URL such as:
+
+```text
+https://github.com/example/feedBack-plugin-example
+```
+
+Plugin Store probes `main` and then `master` for a root `plugin.json`, validates
+the manifest and `minHost`, rejects id collisions with configured stores, then
+downloads and validates the archive before writing it to the plugin directory.
+
+Direct installs are tracked in a separate **Direct GitHub Installs** section so
+they can still be checked, updated, version-switched, rolled back, excluded from
+Update All, or removed later.
+
+They remain third-party code. Validation establishes package structure and
+compatibility; it does not establish that the code is trustworthy.
+
+## Version selection and exclusions
+
+Each plugin card has a **Check** action for refreshing that plugin's source and
+a **Versions** action for tagged GitHub releases. Version history is loaded only
+when requested because GitHub's tags API is rate-limited for anonymous users.
+
+Switching versions uses the same staged archive validation as normal installs.
+Replacing an installed plugin creates the normal rollback snapshot first.
+
+**Exclude from Update All** affects only bulk updates. The plugin remains
+visible, can still be checked, and can still be updated manually.
 
 ## Third-party stores
 
@@ -216,6 +255,11 @@ Catalog and lifecycle:
 
 - `GET /api/plugins/plugin_store/catalog`
 - `GET /api/plugins/plugin_store/catalog?refresh=true`
+- `GET /api/plugins/plugin_store/check/{store_id}/{plugin_id}`
+- `GET /api/plugins/plugin_store/versions/{store_id}/{plugin_id}`
+- `POST /api/plugins/plugin_store/version/{store_id}/{plugin_id}`
+- `POST /api/plugins/plugin_store/exclude/{plugin_id}`
+- `POST /api/plugins/plugin_store/direct/install`
 - `POST /api/plugins/plugin_store/install/{store_id}/{plugin_id}`
 - `POST /api/plugins/plugin_store/update/{store_id}/{plugin_id}`
 - `DELETE /api/plugins/plugin_store/remove/{store_id}/{plugin_id}`
@@ -247,3 +291,11 @@ python -m py_compile routes.py storelib.py
 AGPL-3.0-only
 
 - Self-update now force-refreshes Plugin Store frontend assets after restart to avoid stale `screen.html` / `screen.js` on older feedBack builds.
+
+
+## Acknowledgements
+
+Some package-manager UX ideas in v0.4 — per-plugin checks, exclusions, direct
+GitHub installs, and version selection — were independently implemented after
+reviewing [masc0t/slopsmith-update-manager](https://github.com/masc0t/slopsmith-update-manager).
+No source code from that project is included here.

@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_manifest_is_v033():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.3.3"
+    assert manifest["version"] == "0.4.0"
 
 
 def test_self_update_refreshes_exact_frontend_asset_urls():

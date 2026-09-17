@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_manifest_is_current_release():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.3.3"
+    assert manifest["version"] == "0.4.0"
 
 
 def test_backend_has_bounded_rollback_snapshots():

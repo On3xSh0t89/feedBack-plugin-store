@@ -517,3 +517,51 @@
   font-size: 0.95rem;
   opacity: 1;
 }
+
+
+.plugin-store__dialog--wide {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.plugin-store__versions-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(62vh, 560px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.plugin-store__version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+}
+
+.plugin-store__version-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.plugin-store__version-info > span,
+.plugin-store__version-info > small {
+  font-size: 0.78rem;
+  opacity: 0.76;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .plugin-store__version-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .plugin-store__version-row .plugin-store__button {
+    align-self: flex-start;
+  }
+}

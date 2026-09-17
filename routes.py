@@ -131,6 +131,74 @@ def setup(app: FastAPI, context: dict) -> None:
         except storelib.StoreError as exc:
             fail(exc)
 
+    @app.post(f"{API_PREFIX}/direct/install")
+    def install_direct_github_plugin(
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.install_from_github(
+                str(payload.get("repository", "")),
+                acknowledge_third_party=payload.get("acknowledge_third_party") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.get(f"{API_PREFIX}/check/{{store_id}}/{{plugin_id}}")
+    def check_plugin(
+        store_id: str,
+        plugin_id: str,
+    ):
+        try:
+            return store.check_plugin(store_id, plugin_id)
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.post(f"{API_PREFIX}/exclude/{{plugin_id}}")
+    def set_plugin_excluded(
+        plugin_id: str,
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.set_excluded(
+                plugin_id,
+                payload.get("excluded") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.get(f"{API_PREFIX}/versions/{{store_id}}/{{plugin_id}}")
+    def get_plugin_versions(
+        store_id: str,
+        plugin_id: str,
+    ):
+        try:
+            return store.versions(store_id, plugin_id)
+        except storelib.StoreError as exc:
+            fail(exc)
+
+    @app.post(f"{API_PREFIX}/version/{{store_id}}/{{plugin_id}}")
+    def install_plugin_version(
+        store_id: str,
+        plugin_id: str,
+        payload: dict = Body(default={}),
+        x_feedback_plugin_store: str | None = Header(default=None),
+    ):
+        require_mutation_header(x_feedback_plugin_store)
+        try:
+            return store.install_version(
+                store_id,
+                plugin_id,
+                str(payload.get("ref", "")),
+                str(payload.get("ref_kind", "")),
+                acknowledge_third_party=payload.get("acknowledge_third_party") is True,
+            )
+        except storelib.StoreError as exc:
+            fail(exc)
+
     @app.post(f"{API_PREFIX}/update-all")
     def update_all_plugins(
         payload: dict = Body(default={}),

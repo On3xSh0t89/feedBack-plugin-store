@@ -13,6 +13,7 @@
     selfUpdating: false,
     searchQuery: "",
     filter: "all",
+    versionContext: null,
   };
   window[GLOBAL_KEY] = state;
 
@@ -34,6 +35,7 @@
       summaryUpdates: document.getElementById("plugin-store-summary-updates"),
       summaryAvailable: document.getElementById("plugin-store-summary-available"),
       addStore: document.getElementById("plugin-store-add-store"),
+      installGithub: document.getElementById("plugin-store-install-github"),
       root: document.getElementById("plugin-store-root"),
       host: document.getElementById("plugin-store-host"),
       dialog: document.getElementById("plugin-store-add-dialog"),
@@ -44,6 +46,19 @@
       addError: document.getElementById("plugin-store-add-error"),
       addClose: document.getElementById("plugin-store-add-close"),
       addCancel: document.getElementById("plugin-store-add-cancel"),
+      githubDialog: document.getElementById("plugin-store-github-dialog"),
+      githubForm: document.getElementById("plugin-store-github-form"),
+      githubUrl: document.getElementById("plugin-store-github-url"),
+      githubAck: document.getElementById("plugin-store-github-ack"),
+      githubSubmit: document.getElementById("plugin-store-github-submit"),
+      githubError: document.getElementById("plugin-store-github-error"),
+      githubClose: document.getElementById("plugin-store-github-close"),
+      githubCancel: document.getElementById("plugin-store-github-cancel"),
+      versionsDialog: document.getElementById("plugin-store-versions-dialog"),
+      versionsTitle: document.getElementById("plugin-store-versions-title"),
+      versionsRepo: document.getElementById("plugin-store-versions-repo"),
+      versionsList: document.getElementById("plugin-store-versions-list"),
+      versionsClose: document.getElementById("plugin-store-versions-close"),
     };
   }
 
@@ -508,7 +523,11 @@
     const updates = [];
     for (const store of (data && data.stores) || []) {
       for (const plugin of store.plugins || []) {
-        if (plugin.status === "update_available" && plugin.can_update) {
+        if (
+          plugin.status === "update_available" &&
+          plugin.can_update &&
+          !plugin.excluded
+        ) {
           updates.push({ store, plugin });
         }
       }
@@ -599,6 +618,221 @@
     } finally {
       state.busy.delete(key);
       renderCatalog(state.catalog);
+    }
+  }
+
+  async function checkPlugin(plugin, store) {
+    const key = `check:${store.id}:${plugin.id}`;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    renderCatalog(state.catalog);
+    setBanner(`Checking ${plugin.name}…`);
+
+    try {
+      const checked = await api(
+        `/check/${encodeURIComponent(store.id)}/${encodeURIComponent(plugin.id)}`
+      );
+      setBanner(
+        checked.status === "update_available"
+          ? `${plugin.name}: update ${checked.version} is available.`
+          : `${plugin.name} is up to date.`,
+        checked.status === "update_available" ? "warning" : "success"
+      );
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    } finally {
+      state.busy.delete(key);
+      renderCatalog(state.catalog);
+    }
+  }
+
+  async function toggleExcluded(plugin) {
+    const next = !plugin.excluded;
+    const key = `exclude:${plugin.id}`;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    renderCatalog(state.catalog);
+
+    try {
+      await api(`/exclude/${encodeURIComponent(plugin.id)}`, {
+        method: "POST",
+        body: JSON.stringify({ excluded: next }),
+      });
+      setBanner(
+        next
+          ? `${plugin.name} will be skipped by Update All.`
+          : `${plugin.name} is included in Update All again.`,
+        "success"
+      );
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+    } finally {
+      state.busy.delete(key);
+      renderCatalog(state.catalog);
+    }
+  }
+
+  function closeVersionsDialog() {
+    const { versionsDialog } = elements();
+    state.versionContext = null;
+    if (!versionsDialog) return;
+    if (typeof versionsDialog.close === "function") versionsDialog.close();
+    else versionsDialog.removeAttribute("open");
+  }
+
+  async function installVersion(plugin, store, item) {
+    if (item.compatible === false) return;
+
+    if (store.third_party) {
+      if (!window.confirm(thirdPartyInstallWarning(plugin, store))) return;
+    }
+
+    const action = plugin.installed ? "Switch" : "Install";
+    if (!window.confirm(
+      `${action} ${plugin.name} ${item.version} (${item.label || item.ref})?\n\n` +
+      (plugin.installed
+        ? "The current version will be saved as a rollback snapshot. "
+        : "") +
+      "Restart feedBack after the change."
+    )) return;
+
+    const key = `version:${store.id}:${plugin.id}:${item.ref}`;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+
+    const { versionsList } = elements();
+    if (versionsList) {
+      const loading = document.createElement("div");
+      loading.className = "plugin-store__loading";
+      loading.textContent = `Installing ${plugin.name} ${item.version}…`;
+      versionsList.replaceChildren(loading);
+    }
+
+    try {
+      const result = await api(
+        `/version/${encodeURIComponent(store.id)}/${encodeURIComponent(plugin.id)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ref: item.ref,
+            ref_kind: item.ref_kind,
+            acknowledge_third_party: store.third_party === true,
+          }),
+        }
+      );
+      state.restartRequired = true;
+      syncRestartButton();
+      closeVersionsDialog();
+      setBanner(
+        `${plugin.name} ${result.version} installed. Restart feedBack to apply it.`,
+        "success"
+      );
+      await loadCatalog(false);
+    } catch (error) {
+      setBanner(error.message || String(error), "error");
+      closeVersionsDialog();
+    } finally {
+      state.busy.delete(key);
+    }
+  }
+
+  function renderVersions(plugin, store, data) {
+    const { versionsTitle, versionsRepo, versionsList } = elements();
+    if (!versionsList) return;
+
+    if (versionsTitle) versionsTitle.textContent = `${plugin.name} Versions`;
+    if (versionsRepo) versionsRepo.textContent = data.repository || plugin.repository || "";
+    versionsList.replaceChildren();
+
+    const versions = Array.isArray(data.versions) ? data.versions : [];
+    if (!versions.length) {
+      const empty = document.createElement("div");
+      empty.className = "plugin-store__loading";
+      empty.textContent = "No tagged versions were found.";
+      versionsList.append(empty);
+      return;
+    }
+
+    for (const item of versions) {
+      const row = document.createElement("div");
+      row.className = "plugin-store__version-row";
+
+      const info = document.createElement("div");
+      info.className = "plugin-store__version-info";
+
+      const version = document.createElement("strong");
+      version.textContent = item.version || item.ref;
+      info.append(version);
+
+      const ref = document.createElement("span");
+      ref.textContent =
+        item.label === "Latest"
+          ? `Latest · ${item.ref}`
+          : `Git tag · ${item.label || item.ref}`;
+      info.append(ref);
+
+      if (item.compatibility_reason) {
+        const reason = document.createElement("small");
+        reason.className = "plugin-store__error";
+        reason.textContent = item.compatibility_reason;
+        info.append(reason);
+      }
+
+      const isInstalled =
+        plugin.installed &&
+        plugin.installed_version === item.version;
+
+      const button = actionButton(
+        isInstalled
+          ? "Installed"
+          : plugin.installed
+            ? "Switch"
+            : "Install",
+        isInstalled
+          ? "plugin-store__button--secondary"
+          : "plugin-store__button--primary",
+        isInstalled || item.compatible === false,
+        () => installVersion(plugin, store, item)
+      );
+
+      row.append(info, button);
+      versionsList.append(row);
+    }
+  }
+
+  async function showVersions(plugin, store) {
+    const {
+      versionsDialog,
+      versionsTitle,
+      versionsRepo,
+      versionsList,
+    } = elements();
+    if (!versionsDialog || !versionsList) return;
+
+    state.versionContext = { plugin, store };
+    if (versionsTitle) versionsTitle.textContent = `${plugin.name} Versions`;
+    if (versionsRepo) versionsRepo.textContent = plugin.repository || "";
+    const loading = document.createElement("div");
+    loading.className = "plugin-store__loading";
+    loading.textContent = "Loading GitHub versions…";
+    versionsList.replaceChildren(loading);
+
+    if (typeof versionsDialog.showModal === "function") versionsDialog.showModal();
+    else versionsDialog.setAttribute("open", "");
+
+    try {
+      const data = await api(
+        `/versions/${encodeURIComponent(store.id)}/${encodeURIComponent(plugin.id)}`
+      );
+      renderVersions(plugin, store, data);
+    } catch (error) {
+      versionsList.replaceChildren();
+      const failure = document.createElement("div");
+      failure.className = "plugin-store__dialog-error";
+      failure.textContent = error.message || String(error);
+      versionsList.append(failure);
     }
   }
 
@@ -726,6 +960,7 @@
     title.textContent = plugin.name;
     titleRow.append(title);
     if (store.third_party) titleRow.append(badge("THIRD-PARTY", "warning"));
+    if (plugin.excluded) titleRow.append(badge("EXCLUDED", "warning"));
     body.append(titleRow);
 
     const description = document.createElement("p");
@@ -835,6 +1070,39 @@
       }
     }
 
+    const checkBusy = state.busy.has(`check:${store.id}:${plugin.id}`);
+    actions.append(
+      actionButton(
+        checkBusy ? "Checking…" : "Check",
+        "plugin-store__button--secondary",
+        checkBusy,
+        () => checkPlugin(plugin, store),
+        "Check just this plugin for a newer version."
+      )
+    );
+
+    actions.append(
+      actionButton(
+        "Versions",
+        "plugin-store__button--secondary",
+        false,
+        () => showVersions(plugin, store),
+        "View tagged GitHub versions and switch to a specific release."
+      )
+    );
+
+    if (plugin.installed) {
+      const excludeBusy = state.busy.has(`exclude:${plugin.id}`);
+      actions.append(
+        actionButton(
+          plugin.excluded ? "Include in Update All" : "Exclude from Update All",
+          "plugin-store__button--secondary",
+          excludeBusy,
+          () => toggleExcluded(plugin)
+        )
+      );
+    }
+
     card.append(body, actions);
     return card;
   }
@@ -894,7 +1162,7 @@
     }
     header.append(headingWrap);
 
-    if (store.third_party) {
+    if (store.third_party && !store.direct) {
       header.append(
         actionButton(
           "Remove Store",
@@ -1086,10 +1354,92 @@
     }
   }
 
+  function showGithubDialog() {
+    const {
+      githubDialog,
+      githubUrl,
+      githubAck,
+      githubError,
+    } = elements();
+    if (!githubDialog) return;
+    if (githubUrl) githubUrl.value = "";
+    if (githubAck) githubAck.checked = false;
+    if (githubError) {
+      githubError.hidden = true;
+      githubError.textContent = "";
+    }
+    if (typeof githubDialog.showModal === "function") githubDialog.showModal();
+    else githubDialog.setAttribute("open", "");
+    window.setTimeout(() => githubUrl && githubUrl.focus(), 0);
+  }
+
+  function closeGithubDialog() {
+    const { githubDialog } = elements();
+    if (!githubDialog) return;
+    if (typeof githubDialog.close === "function") githubDialog.close();
+    else githubDialog.removeAttribute("open");
+  }
+
+  async function submitGithubInstall(event) {
+    event.preventDefault();
+    const {
+      githubUrl,
+      githubAck,
+      githubSubmit,
+      githubError,
+    } = elements();
+
+    const repository = githubUrl ? githubUrl.value.trim() : "";
+    const acknowledged = Boolean(githubAck && githubAck.checked);
+
+    if (!repository || !acknowledged) {
+      if (githubError) {
+        githubError.hidden = false;
+        githubError.textContent =
+          "Enter a public GitHub repository URL and acknowledge the third-party code warning.";
+      }
+      return;
+    }
+
+    if (githubSubmit) githubSubmit.disabled = true;
+    if (githubError) {
+      githubError.hidden = false;
+      githubError.textContent =
+        "Validating plugin.json, feedBack compatibility, and repository structure…";
+    }
+
+    try {
+      const result = await api("/direct/install", {
+        method: "POST",
+        body: JSON.stringify({
+          repository,
+          acknowledge_third_party: true,
+        }),
+      });
+      closeGithubDialog();
+      state.restartRequired = true;
+      syncRestartButton();
+      setBanner(
+        `${result.plugin_id} ${result.version} installed from GitHub. Restart feedBack to load it.`,
+        "success"
+      );
+      await loadCatalog(false);
+    } catch (error) {
+      if (githubError) {
+        githubError.hidden = false;
+        githubError.textContent = error.message || String(error);
+      }
+    } finally {
+      if (githubSubmit) githubSubmit.disabled = false;
+    }
+  }
+
   function bind() {
     const {
       refresh, restart, addStore, addForm, addClose, addCancel, dialog,
       search, filters, updateAll, updateLink,
+      installGithub, githubDialog, githubForm, githubClose, githubCancel,
+      versionsDialog, versionsClose,
     } = elements();
 
     if (updateLink && updateLink.dataset.pluginStoreBound !== "1") {
@@ -1129,6 +1479,37 @@
       restart.dataset.pluginStoreBound = "1";
       restart.addEventListener("click", restartFeedBack);
     }
+    if (installGithub && installGithub.dataset.pluginStoreBound !== "1") {
+      installGithub.dataset.pluginStoreBound = "1";
+      installGithub.addEventListener("click", showGithubDialog);
+    }
+    if (githubForm && githubForm.dataset.pluginStoreBound !== "1") {
+      githubForm.dataset.pluginStoreBound = "1";
+      githubForm.addEventListener("submit", submitGithubInstall);
+    }
+    for (const button of [githubClose, githubCancel]) {
+      if (button && button.dataset.pluginStoreBound !== "1") {
+        button.dataset.pluginStoreBound = "1";
+        button.addEventListener("click", closeGithubDialog);
+      }
+    }
+    if (githubDialog && githubDialog.dataset.pluginStoreBound !== "1") {
+      githubDialog.dataset.pluginStoreBound = "1";
+      githubDialog.addEventListener("click", (event) => {
+        if (event.target === githubDialog) closeGithubDialog();
+      });
+    }
+    if (versionsClose && versionsClose.dataset.pluginStoreBound !== "1") {
+      versionsClose.dataset.pluginStoreBound = "1";
+      versionsClose.addEventListener("click", closeVersionsDialog);
+    }
+    if (versionsDialog && versionsDialog.dataset.pluginStoreBound !== "1") {
+      versionsDialog.dataset.pluginStoreBound = "1";
+      versionsDialog.addEventListener("click", (event) => {
+        if (event.target === versionsDialog) closeVersionsDialog();
+      });
+    }
+
     if (addStore && addStore.dataset.pluginStoreBound !== "1") {
       addStore.dataset.pluginStoreBound = "1";
       addStore.addEventListener("click", showAddStoreDialog);

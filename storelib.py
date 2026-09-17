@@ -36,6 +36,8 @@ REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 STORE_SCHEMA = 1
 OFFICIAL_STORE_ID = "official"
 OFFICIAL_STORE_NAME = "Official feedBack Plugins"
+DIRECT_STORE_ID = "direct"
+DIRECT_STORE_NAME = "Direct GitHub Installs"
 OFFICIAL_GITHUB_ORG = "got-feedback"
 PLUGIN_SPEC_MAJOR = 1
 REGISTRY_CACHE_SECONDS = 300
@@ -49,7 +51,7 @@ DEFAULT_MAX_FILES = 10000
 DEFAULT_BACKUPS_PER_PLUGIN = 2
 MAX_BACKUPS_PER_PLUGIN = 10
 
-USER_AGENT = "feedBack-plugin-store/0.3.1"
+USER_AGENT = "feedBack-plugin-store/0.4.0"
 SELF_UPDATE_CACHE_SECONDS = 300
 MAX_SELF_MANIFEST_BYTES = 128 * 1024
 
@@ -384,10 +386,14 @@ def archive_url(entry: dict[str, Any], *, official: bool = False) -> str:
     if official and owner.lower() != OFFICIAL_GITHUB_ORG:
         raise StoreError("Refusing to download a non-official plugin as an official plugin.", 403)
     ref = _validate_ref(str(entry["ref"]), str(entry["id"]))
+    ref_kind = str(entry.get("ref_kind") or "head")
+    if ref_kind not in {"head", "tag"}:
+        raise StoreError("Invalid GitHub ref type.", 500)
+    ref_namespace = "heads" if ref_kind == "head" else "tags"
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
     ref_path = "/".join(urllib.parse.quote(p, safe="") for p in ref.split("/"))
-    return f"https://codeload.github.com/{owner_q}/{repo_q}/zip/refs/heads/{ref_path}"
+    return f"https://codeload.github.com/{owner_q}/{repo_q}/zip/refs/{ref_namespace}/{ref_path}"
 
 
 def raw_manifest_url(entry: dict[str, Any]) -> str:
@@ -654,7 +660,9 @@ class PluginStore:
         self.third_cache_dir = self.state_dir / "third-party"
         self.stores_path = self.state_dir / "stores.json"
         self.managed_path = self.state_dir / "managed-plugins.json"
+        self.exclusions_path = self.state_dir / "exclusions.json"
         self.backups_dir = self.state_dir / "backups"
+        self.direct_cache_dir = self.state_dir / "direct"
         self.official_cache_path = self.state_dir / "registry.yaml"
         self.official_meta_path = self.state_dir / "registry-meta.json"
         self.registry_url = discover_registry_url(self.plugin_dir)
@@ -687,6 +695,7 @@ class PluginStore:
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.third_cache_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
+        self.direct_cache_dir.mkdir(parents=True, exist_ok=True)
         self.plugin_root.mkdir(parents=True, exist_ok=True)
 
     # ---------- low-level network/cache ----------
@@ -1171,6 +1180,218 @@ class PluginStore:
     def _save_managed(self, data: dict[str, Any]) -> None:
         atomic_write_json(self.managed_path, data)
 
+    def _exclusions(self) -> set[str]:
+        data = read_json(self.exclusions_path, {"plugins": []}) or {"plugins": []}
+        plugins = data.get("plugins", []) if isinstance(data, dict) else []
+        if not isinstance(plugins, list):
+            return set()
+        return {str(item) for item in plugins if ID_RE.fullmatch(str(item))}
+
+    def _save_exclusions(self, plugins: set[str]) -> None:
+        atomic_write_json(
+            self.exclusions_path,
+            {"schema": 1, "plugins": sorted(plugins)},
+        )
+
+    def set_excluded(self, plugin_id: str, excluded: bool) -> dict[str, Any]:
+        if not ID_RE.fullmatch(plugin_id):
+            raise StoreError("Invalid plugin id.", 400)
+        if plugin_id == "plugin_store":
+            raise StoreError("The Plugin Store cannot be excluded.", 409)
+
+        target = safe_target(self.plugin_root, plugin_id)
+        if not target.exists():
+            raise StoreError("Only installed plugins can be excluded.", 404)
+
+        exclusions = self._exclusions()
+        if excluded:
+            exclusions.add(plugin_id)
+        else:
+            exclusions.discard(plugin_id)
+        self._save_exclusions(exclusions)
+        return {
+            "ok": True,
+            "plugin_id": plugin_id,
+            "excluded": plugin_id in exclusions,
+        }
+
+    def _fetch_repo_manifest(
+        self,
+        repository: str,
+        ref: str,
+        *,
+        plugin_id_hint: str = "plugin",
+    ) -> dict[str, Any]:
+        entry = {
+            "id": plugin_id_hint if ID_RE.fullmatch(plugin_id_hint) else "plugin",
+            "repository": repository,
+            "ref": ref,
+        }
+        url = raw_manifest_url(entry)
+        try:
+            text, _headers, _final = self._fetch_text(
+                url,
+                max_bytes=MAX_MANIFEST_BYTES,
+                timeout=10,
+                headers={"Accept": "application/json, text/plain;q=0.9"},
+            )
+        except urllib.error.HTTPError as exc:
+            raise StoreError(
+                f"Could not read plugin.json from {repository} at {ref}: HTTP {exc.code}.",
+                422,
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError) as exc:
+            raise StoreError(
+                f"Could not read plugin.json from {repository} at {ref}: {exc}",
+                422,
+            ) from exc
+
+        try:
+            manifest = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise StoreError("Remote plugin.json is invalid JSON.", 422) from exc
+        if not isinstance(manifest, dict):
+            raise StoreError("Remote plugin.json must be a JSON object.", 422)
+        return manifest
+
+    def inspect_github_plugin(self, repository: str) -> dict[str, Any]:
+        parsed = parse_https_github_repo(repository)
+        if not parsed:
+            raise StoreError(
+                "Enter a public GitHub repository URL such as https://github.com/owner/repo.",
+                400,
+            )
+        owner, repo = parsed
+        normalized = f"https://github.com/{owner}/{repo}"
+
+        last_error: StoreError | None = None
+        for ref in ("main", "master"):
+            try:
+                manifest = self._fetch_repo_manifest(normalized, ref)
+                compatibility = validate_plugin_manifest(
+                    manifest,
+                    expected_entry=None,
+                    host_version=self.host_version,
+                )
+                plugin_id = compatibility["id"]
+                if plugin_id == "plugin_store":
+                    raise StoreError("The Plugin Store cannot install another copy of itself.", 409)
+
+                # Avoid ambiguous duplicate ownership. Direct installs are for
+                # plugins that are not already offered by a configured store.
+                if plugin_id in self._official_ids():
+                    raise StoreError(
+                        f"{plugin_id} is already available from the official feedBack store.",
+                        409,
+                    )
+                if plugin_id in self._other_third_party_ids():
+                    raise StoreError(
+                        f"{plugin_id} is already available from a configured third-party store.",
+                        409,
+                    )
+
+                return {
+                    "id": plugin_id,
+                    "name": str(manifest.get("name") or plugin_id),
+                    "description": str(manifest.get("description") or ""),
+                    "version": compatibility["version"],
+                    "repository": normalized,
+                    "ref": ref,
+                    "ref_kind": "head",
+                    "compatible": compatibility["compatible"],
+                    "compatibility_reason": compatibility["compatibility_reason"],
+                    "min_host": compatibility["min_host"],
+                }
+            except StoreError as exc:
+                last_error = exc
+                # A manifest found on main/master but rejected for a semantic
+                # reason should not be masked by probing the other branch.
+                if exc.status_code in {400, 409}:
+                    raise
+
+        if last_error is not None:
+            raise StoreError(
+                "No compatible feedBack plugin.json was found at the repository root on main or master.",
+                422,
+            ) from last_error
+        raise StoreError("Could not inspect the GitHub plugin repository.", 422)
+
+    def _direct_managed(self) -> dict[str, dict[str, Any]]:
+        managed = self._managed()
+        return {
+            plugin_id: info
+            for plugin_id, info in managed.items()
+            if isinstance(info, dict) and info.get("store_id") == DIRECT_STORE_ID
+        }
+
+    def _direct_entry(self, plugin_id: str, *, force: bool = False) -> dict[str, Any]:
+        info = self._direct_managed().get(plugin_id)
+        if not info:
+            raise StoreError("Direct GitHub plugin is not managed by Plugin Store.", 404)
+
+        repository = str(info.get("repository") or "")
+        tracking_ref = str(info.get("tracking_ref") or info.get("ref") or "main")
+        cache_path = self.direct_cache_dir / f"{plugin_id}.json"
+        ensure_within(cache_path, self.direct_cache_dir)
+        cached = read_json(cache_path, {}) or {}
+
+        if (
+            not force
+            and isinstance(cached, dict)
+            and time.time() - float(cached.get("checked_at") or 0) < REGISTRY_CACHE_SECONDS
+            and isinstance(cached.get("entry"), dict)
+        ):
+            return cached["entry"]
+
+        try:
+            manifest = self._fetch_repo_manifest(
+                repository,
+                tracking_ref,
+                plugin_id_hint=plugin_id,
+            )
+            compatibility = validate_plugin_manifest(
+                manifest,
+                expected_entry=None,
+                host_version=self.host_version,
+            )
+            if compatibility["id"] != plugin_id:
+                raise StoreError(
+                    "Direct GitHub repository plugin id changed; automatic updates are blocked.",
+                    409,
+                )
+            entry = {
+                "id": plugin_id,
+                "name": str(manifest.get("name") or plugin_id),
+                "description": str(manifest.get("description") or ""),
+                "version": compatibility["version"],
+                "repository": repository,
+                "ref": tracking_ref,
+                "ref_kind": "head",
+            }
+            atomic_write_json(
+                cache_path,
+                {
+                    "checked_at": time.time(),
+                    "entry": entry,
+                    "compatibility": compatibility,
+                },
+            )
+            return entry
+        except StoreError:
+            if isinstance(cached, dict) and isinstance(cached.get("entry"), dict):
+                return cached["entry"]
+            target = safe_target(self.plugin_root, plugin_id)
+            manifest = read_plugin_manifest(target)
+            return {
+                "id": plugin_id,
+                "name": str(manifest.get("name") or plugin_id),
+                "description": str(manifest.get("description") or ""),
+                "version": str(manifest.get("version") or info.get("version") or "0.0.0"),
+                "repository": repository,
+                "ref": tracking_ref,
+                "ref_kind": "head",
+            }
+
     def _third_dir(self, store_id: str) -> Path:
         if not re.fullmatch(r"third-[0-9a-f]{12}", store_id):
             raise StoreError("Invalid third-party store id.", 400)
@@ -1614,6 +1835,7 @@ class PluginStore:
             "rollback_available": False,
             "rollback_version": None,
             "rollback_created_at": None,
+            "excluded": entry["id"] in self._exclusions(),
         }
 
         if compatibility:
@@ -1762,6 +1984,69 @@ class PluginStore:
                     }
                 )
 
+        direct_managed = self._direct_managed()
+        if direct_managed:
+            direct_plugins: list[dict[str, Any]] = []
+            direct_warning: str | None = None
+            for plugin_id in sorted(direct_managed):
+                try:
+                    entry = self._direct_entry(plugin_id, force=force_refresh)
+                    cached = read_json(self.direct_cache_dir / f"{plugin_id}.json", {}) or {}
+                    compat = cached.get("compatibility") if isinstance(cached, dict) else None
+                    direct_plugins.append(
+                        self._installed_state(
+                            entry,
+                            store_id=DIRECT_STORE_ID,
+                            third_party=True,
+                            compatibility=compat if isinstance(compat, dict) else None,
+                        )
+                    )
+                except StoreError as exc:
+                    direct_warning = exc.message
+                    info = direct_managed[plugin_id]
+                    target = safe_target(self.plugin_root, plugin_id)
+                    try:
+                        manifest = read_plugin_manifest(target)
+                        fallback_entry = {
+                            "id": plugin_id,
+                            "name": str(manifest.get("name") or plugin_id),
+                            "description": str(manifest.get("description") or ""),
+                            "version": str(manifest.get("version") or info.get("version") or "0.0.0"),
+                            "repository": str(info.get("repository") or ""),
+                            "ref": str(info.get("tracking_ref") or info.get("ref") or "main"),
+                            "ref_kind": "head",
+                        }
+                        state = self._installed_state(
+                            fallback_entry,
+                            store_id=DIRECT_STORE_ID,
+                            third_party=True,
+                            compatibility={
+                                "compatible": True,
+                                "compatibility_reason": None,
+                                "min_host": manifest.get("minHost"),
+                            },
+                        )
+                        state["error"] = exc.message
+                        direct_plugins.append(state)
+                    except StoreError:
+                        continue
+
+            stores_output.append(
+                {
+                    "id": DIRECT_STORE_ID,
+                    "name": DIRECT_STORE_NAME,
+                    "description": "Plugins installed directly from public GitHub repositories.",
+                    "official": False,
+                    "third_party": True,
+                    "direct": True,
+                    "url": None,
+                    "source": "github",
+                    "stale": bool(direct_warning),
+                    "warning": direct_warning,
+                    "plugins": direct_plugins,
+                }
+            )
+
         return {
             "schema": 2,
             "stores": stores_output,
@@ -1789,6 +2074,24 @@ class PluginStore:
                 "name": OFFICIAL_STORE_NAME,
                 "url": info["source_url"],
             }, False
+
+        if store_id == DIRECT_STORE_ID:
+            plugins = [
+                self._direct_entry(plugin_id, force=False)
+                for plugin_id in sorted(self._direct_managed())
+            ]
+            return {
+                "schema": STORE_SCHEMA,
+                "store": {
+                    "name": DIRECT_STORE_NAME,
+                    "description": "Plugins installed directly from public GitHub repositories.",
+                },
+                "plugins": plugins,
+            }, {
+                "id": DIRECT_STORE_ID,
+                "name": DIRECT_STORE_NAME,
+                "url": None,
+            }, True
 
         for config in self._configured_stores():
             if str(config.get("id")) == store_id:
@@ -1838,34 +2141,28 @@ class PluginStore:
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise StoreError(f"Plugin download failed: {exc}", 502) from exc
 
-    def install(
+    def _install_entry(
         self,
-        plugin_id: str,
+        entry: dict[str, Any],
         *,
         replace: bool,
-        store_id: str = OFFICIAL_STORE_ID,
+        store_id: str,
+        store_config: dict[str, Any],
+        third_party: bool,
         acknowledge_third_party: bool = False,
+        managed_extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        plugin_id = str(entry.get("id") or "")
         if plugin_id == "plugin_store":
             raise StoreError("The Plugin Store cannot modify itself.", 409)
+        if not ID_RE.fullmatch(plugin_id):
+            raise StoreError("Invalid plugin id.", 400)
 
-        entry, store_config, third_party = self._entry(plugin_id, store_id)
         if third_party and not acknowledge_third_party:
             raise StoreError(
                 "Third-party plugins execute code inside feedBack. Explicit risk acknowledgement is required.",
                 400,
             )
-
-        if third_party:
-            compat = read_json(self._compat_path(store_id), {}) or {}
-            plugin_compat = compat.get(plugin_id) if isinstance(compat, dict) else None
-            if not isinstance(plugin_compat, dict) or not plugin_compat.get("compatible", False):
-                reason = (
-                    plugin_compat.get("compatibility_reason")
-                    if isinstance(plugin_compat, dict)
-                    else "Compatibility has not been verified."
-                )
-                raise StoreError(f"Plugin is not compatible with this feedBack Host: {reason}", 409)
 
         target = safe_target(self.plugin_root, plugin_id)
         if target.exists() and not replace:
@@ -1880,11 +2177,14 @@ class PluginStore:
             origin = managed.get(plugin_id)
             if not isinstance(origin, dict) or origin.get("store_id") != store_id:
                 raise StoreError(
-                    "This installed plugin was not installed by this third-party store; automatic replacement is blocked.",
+                    "This installed plugin was not installed by this source; automatic replacement is blocked.",
                     409,
                 )
             if origin.get("repository") != entry["repository"]:
-                raise StoreError("Third-party plugin repository changed; automatic replacement is blocked.", 409)
+                raise StoreError(
+                    "Plugin repository changed; automatic replacement is blocked.",
+                    409,
+                )
 
         operation_id = uuid.uuid4().hex
         work_dir = self.tmp_dir / operation_id
@@ -1900,7 +2200,7 @@ class PluginStore:
         rollback_snapshot: Path | None = None
         update_committed = False
         try:
-            self._download(entry, archive, official=not third_party)
+            self._download(entry, archive, official=store_id == OFFICIAL_STORE_ID)
             safe_extract_zip(
                 archive,
                 extracted,
@@ -1942,14 +2242,19 @@ class PluginStore:
             if backup.exists():
                 shutil.rmtree(backup)
 
-            managed[plugin_id] = {
+            managed_record = {
                 "store_id": store_id,
                 "store_name": store_config.get("name"),
                 "repository": entry["repository"],
-                "version": entry["version"],
+                "version": compatibility["version"],
+                "ref": entry.get("ref"),
+                "ref_kind": entry.get("ref_kind") or "head",
                 "third_party": third_party,
                 "installed_at": time.time(),
             }
+            if managed_extra:
+                managed_record.update(managed_extra)
+            managed[plugin_id] = managed_record
             self._save_managed(managed)
             update_committed = True
 
@@ -1957,19 +2262,22 @@ class PluginStore:
                 "plugin_store_install_complete",
                 extra={
                     "plugin_id": plugin_id,
-                    "version": entry["version"],
+                    "version": compatibility["version"],
                     "replace": replace,
                     "store_id": store_id,
                     "third_party": third_party,
+                    "ref": entry.get("ref"),
+                    "ref_kind": entry.get("ref_kind") or "head",
                 },
             )
             return {
                 "ok": True,
                 "plugin_id": plugin_id,
-                "version": entry["version"],
+                "version": compatibility["version"],
                 "operation": "update" if replace else "install",
                 "restart_required": True,
                 "third_party": third_party,
+                "ref": entry.get("ref"),
             }
         finally:
             if staging.exists():
@@ -1980,6 +2288,308 @@ class PluginStore:
                 shutil.rmtree(rollback_snapshot, ignore_errors=True)
                 self._trim_backups(plugin_id)
 
+    def install(
+        self,
+        plugin_id: str,
+        *,
+        replace: bool,
+        store_id: str = OFFICIAL_STORE_ID,
+        acknowledge_third_party: bool = False,
+    ) -> dict[str, Any]:
+        entry, store_config, third_party = self._entry(plugin_id, store_id)
+
+        if third_party and store_id != DIRECT_STORE_ID:
+            compat = read_json(self._compat_path(store_id), {}) or {}
+            plugin_compat = compat.get(plugin_id) if isinstance(compat, dict) else None
+            if not isinstance(plugin_compat, dict) or not plugin_compat.get("compatible", False):
+                reason = (
+                    plugin_compat.get("compatibility_reason")
+                    if isinstance(plugin_compat, dict)
+                    else "Compatibility has not been verified."
+                )
+                raise StoreError(
+                    f"Plugin is not compatible with this feedBack Host: {reason}",
+                    409,
+                )
+
+        managed_extra = None
+        if store_id == DIRECT_STORE_ID:
+            origin = self._managed().get(plugin_id)
+            tracking_ref = (
+                str(origin.get("tracking_ref") or entry.get("ref") or "main")
+                if isinstance(origin, dict)
+                else str(entry.get("ref") or "main")
+            )
+            managed_extra = {
+                "direct": True,
+                "tracking_ref": tracking_ref,
+            }
+
+        return self._install_entry(
+            entry,
+            replace=replace,
+            store_id=store_id,
+            store_config=store_config,
+            third_party=third_party,
+            acknowledge_third_party=acknowledge_third_party,
+            managed_extra=managed_extra,
+        )
+
+    def install_from_github(
+        self,
+        repository: str,
+        *,
+        acknowledge_third_party: bool,
+    ) -> dict[str, Any]:
+        if not acknowledge_third_party:
+            raise StoreError(
+                "Direct GitHub plugins are third-party code. Explicit risk acknowledgement is required.",
+                400,
+            )
+
+        entry = self.inspect_github_plugin(repository)
+        if not entry["compatible"]:
+            raise StoreError(
+                f"Plugin is not compatible with this feedBack Host: {entry['compatibility_reason']}",
+                409,
+            )
+
+        return self._install_entry(
+            entry,
+            replace=False,
+            store_id=DIRECT_STORE_ID,
+            store_config={
+                "id": DIRECT_STORE_ID,
+                "name": DIRECT_STORE_NAME,
+                "url": entry["repository"],
+            },
+            third_party=True,
+            acknowledge_third_party=True,
+            managed_extra={
+                "direct": True,
+                "tracking_ref": entry["ref"],
+            },
+        )
+
+    def check_plugin(self, store_id: str, plugin_id: str) -> dict[str, Any]:
+        if not ID_RE.fullmatch(plugin_id):
+            raise StoreError("Invalid plugin id.", 400)
+
+        if store_id == OFFICIAL_STORE_ID:
+            info = self._official_info(force=True)
+            for entry in info["registry"]["plugins"]:
+                if entry["id"] == plugin_id:
+                    return self._installed_state(
+                        entry,
+                        store_id=OFFICIAL_STORE_ID,
+                        third_party=False,
+                        compatibility=None,
+                    )
+            raise StoreError("Plugin is not present in the official store.", 404)
+
+        if store_id == DIRECT_STORE_ID:
+            entry = self._direct_entry(plugin_id, force=True)
+            cached = read_json(self.direct_cache_dir / f"{plugin_id}.json", {}) or {}
+            compat = cached.get("compatibility") if isinstance(cached, dict) else None
+            return self._installed_state(
+                entry,
+                store_id=DIRECT_STORE_ID,
+                third_party=True,
+                compatibility=compat if isinstance(compat, dict) else None,
+            )
+
+        for config in self._configured_stores():
+            if str(config.get("id")) != store_id:
+                continue
+            info = self._third_registry_info(config, force=True)
+            compat = read_json(self._compat_path(store_id), {}) or {}
+            for entry in info["registry"]["plugins"]:
+                if entry["id"] == plugin_id:
+                    return self._installed_state(
+                        entry,
+                        store_id=store_id,
+                        third_party=True,
+                        compatibility=compat.get(plugin_id) if isinstance(compat, dict) else None,
+                    )
+            raise StoreError("Plugin is not present in the selected store.", 404)
+
+        raise StoreError("Plugin store source not found.", 404)
+
+    def _github_tags(self, repository: str, limit: int = 12) -> list[str]:
+        parsed = parse_https_github_repo(repository)
+        if not parsed:
+            raise StoreError("Invalid GitHub repository.", 400)
+        owner, repo = parsed
+        owner_q = urllib.parse.quote(owner, safe="")
+        repo_q = urllib.parse.quote(repo, safe="")
+        url = f"https://api.github.com/repos/{owner_q}/{repo_q}/tags?per_page={max(1, min(limit, 30))}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=12) as response:
+                final = urllib.parse.urlparse(response.geturl())
+                if final.scheme != "https" or (final.hostname or "").lower() != "api.github.com":
+                    raise StoreError("GitHub API redirected to an unexpected host.", 502)
+                payload = response.read(512 * 1024 + 1)
+                if len(payload) > 512 * 1024:
+                    raise StoreError("GitHub tag response was unexpectedly large.", 502)
+        except StoreError:
+            raise
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                raise StoreError(
+                    "GitHub rate limit reached while loading plugin versions. Try again later.",
+                    429,
+                ) from exc
+            raise StoreError(
+                f"GitHub returned HTTP {exc.code} while loading plugin versions.",
+                502,
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise StoreError(f"Could not load plugin versions from GitHub: {exc}", 502) from exc
+
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StoreError("GitHub returned invalid tag data.", 502) from exc
+        if not isinstance(data, list):
+            raise StoreError("GitHub returned invalid tag data.", 502)
+
+        tags: list[str] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            try:
+                _validate_ref(name, "plugin")
+            except StoreError:
+                continue
+            if name and name not in tags:
+                tags.append(name)
+        return tags[:limit]
+
+    def versions(self, store_id: str, plugin_id: str) -> dict[str, Any]:
+        entry, _store_config, third_party = self._entry(plugin_id, store_id)
+        repository = entry["repository"]
+
+        versions: list[dict[str, Any]] = [
+            {
+                "version": entry["version"],
+                "ref": entry["ref"],
+                "ref_kind": entry.get("ref_kind") or "head",
+                "label": "Latest",
+                "compatible": True,
+                "compatibility_reason": None,
+            }
+        ]
+        seen = {(entry["version"], entry["ref"])}
+
+        for tag in self._github_tags(repository):
+            try:
+                manifest = self._fetch_repo_manifest(
+                    repository,
+                    tag,
+                    plugin_id_hint=plugin_id,
+                )
+                compatibility = validate_plugin_manifest(
+                    manifest,
+                    expected_entry=None,
+                    host_version=self.host_version,
+                )
+                if compatibility["id"] != plugin_id:
+                    continue
+                key = (compatibility["version"], tag)
+                if key in seen:
+                    continue
+                seen.add(key)
+                versions.append(
+                    {
+                        "version": compatibility["version"],
+                        "ref": tag,
+                        "ref_kind": "tag",
+                        "label": tag,
+                        "compatible": compatibility["compatible"],
+                        "compatibility_reason": compatibility["compatibility_reason"],
+                    }
+                )
+            except StoreError:
+                continue
+
+        return {
+            "plugin_id": plugin_id,
+            "repository": repository,
+            "store_id": store_id,
+            "third_party": third_party,
+            "versions": versions,
+        }
+
+    def install_version(
+        self,
+        store_id: str,
+        plugin_id: str,
+        ref: str,
+        ref_kind: str,
+        *,
+        acknowledge_third_party: bool,
+    ) -> dict[str, Any]:
+        base_entry, store_config, third_party = self._entry(plugin_id, store_id)
+        listing = self.versions(store_id, plugin_id)
+
+        selected = None
+        for item in listing["versions"]:
+            if item.get("ref") == ref and item.get("ref_kind") == ref_kind:
+                selected = item
+                break
+        if not selected:
+            raise StoreError("Requested plugin version is not in the verified version list.", 404)
+        if selected.get("compatible") is False:
+            raise StoreError(
+                f"Plugin version is incompatible: {selected.get('compatibility_reason') or 'unknown reason'}",
+                409,
+            )
+
+        entry = {
+            **base_entry,
+            "version": selected["version"],
+            "ref": selected["ref"],
+            "ref_kind": selected["ref_kind"],
+        }
+
+        target = safe_target(self.plugin_root, plugin_id)
+        replace = target.exists()
+
+        managed_extra = {
+            "selected_ref": selected["ref"],
+            "selected_ref_kind": selected["ref_kind"],
+        }
+        if store_id == DIRECT_STORE_ID:
+            origin = self._managed().get(plugin_id)
+            managed_extra.update(
+                {
+                    "direct": True,
+                    "tracking_ref": (
+                        str(origin.get("tracking_ref") or base_entry.get("ref") or "main")
+                        if isinstance(origin, dict)
+                        else str(base_entry.get("ref") or "main")
+                    ),
+                }
+            )
+
+        return self._install_entry(
+            entry,
+            replace=replace,
+            store_id=store_id,
+            store_config=store_config,
+            third_party=third_party,
+            acknowledge_third_party=acknowledge_third_party,
+            managed_extra=managed_extra,
+        )
 
     def update_all(self, *, acknowledge_third_party: bool = False) -> dict[str, Any]:
         catalog = self.catalog(force_refresh=False)
@@ -1993,6 +2603,7 @@ class PluginStore:
                     isinstance(plugin, dict)
                     and plugin.get("status") == "update_available"
                     and plugin.get("can_update") is True
+                    and plugin.get("excluded") is not True
                 ):
                     candidates.append((store, plugin))
 
@@ -2095,6 +2706,19 @@ class PluginStore:
         shutil.rmtree(target)
         managed.pop(plugin_id, None)
         self._save_managed(managed)
+
+        exclusions = self._exclusions()
+        if plugin_id in exclusions:
+            exclusions.discard(plugin_id)
+            self._save_exclusions(exclusions)
+
+        direct_cache = self.direct_cache_dir / f"{plugin_id}.json"
+        ensure_within(direct_cache, self.direct_cache_dir)
+        try:
+            direct_cache.unlink()
+        except FileNotFoundError:
+            pass
+
         self.log.info(
             "plugin_store_remove_complete",
             extra={"plugin_id": plugin_id, "store_id": store_id},

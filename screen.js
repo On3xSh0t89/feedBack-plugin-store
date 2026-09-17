@@ -618,14 +618,26 @@
   }
 
   function statusLabel(plugin) {
+    const builtin = plugin.install_source === "builtin";
+    const manual = plugin.install_source === "manual";
     switch (plugin.status) {
       case "installed":
-        return `Installed ${plugin.installed_version || ""}`.trim();
+        return builtin
+          ? `Built into feedBack ${plugin.installed_version || ""}`.trim()
+          : `Installed ${plugin.installed_version || ""}`.trim();
       case "update_available":
-        return `Update available: ${plugin.installed_version || "?"} → ${plugin.version}`;
+        return builtin
+          ? `Built into feedBack ${plugin.installed_version || "?"} — update ${plugin.version} available`
+          : `Update available: ${plugin.installed_version || "?"} → ${plugin.version}`;
       case "local_newer":
-        return `Installed ${plugin.installed_version || "?"} (newer than catalog)`;
+        return builtin
+          ? `Built into feedBack ${plugin.installed_version || "?"} (newer than catalog)`
+          : `Installed ${plugin.installed_version || "?"} (newer than catalog)`;
       case "installed_external":
+        if (manual) {
+          const newer = plugin.catalog_newer ? ` (catalog has ${plugin.version})` : "";
+          return `Installed manually ${plugin.installed_version || ""}${newer} — update it outside the store`;
+        }
         return `Installed ${plugin.installed_version || ""} — not managed by this store`.trim();
       case "incompatible":
         return "Not compatible with this feedBack version";

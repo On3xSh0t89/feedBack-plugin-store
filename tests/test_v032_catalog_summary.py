@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_manifest_is_v032():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.4.2"
+    assert manifest["version"] == "0.4.3"
 
 
 def test_catalog_summary_markup_exists():

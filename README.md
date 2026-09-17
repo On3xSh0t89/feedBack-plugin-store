@@ -93,6 +93,16 @@ python tools/sync_registry.py
 
 An optional `GITHUB_TOKEN` can be supplied to avoid anonymous GitHub API rate limits.
 
+## Plugins that are already installed
+
+A catalog plugin counts as installed wherever feedBack would load it from:
+
+- **Store-managed:** `<plugins folder>/<plugin id>`. Update, remove and roll back work as usual.
+- **Installed manually:** any other folder in the plugins folder whose `plugin.json` has the same `id`, for example a `git clone` named after its repository. It shows as *Installed manually*. The store never updates or removes it, and it won't install a second copy next to it.
+- **Built into feedBack:** plugins bundled with the app, in the Host's own `plugins` package. They show as *Built into feedBack* and can't be removed here. If the catalog has a newer version, **Update** installs it into the user plugins folder, which the Host loads first. The exception is a bundled copy that the Host always keeps (`"bundled": true` in a folder named after the id); the store offers no update for those.
+
+The bundled folder is found through the running Host. Set `FEEDBACK_BUILTIN_PLUGINS_DIR` to override it.
+
 ## Direct GitHub installs
 
 The **Install from GitHub** action is an advanced third-party path for plugins
@@ -265,6 +275,8 @@ environment:
   FEEDBACK_PLUGIN_STORE_MAX_ARCHIVE_MB: "100"
   FEEDBACK_PLUGIN_STORE_MAX_EXTRACT_MB: "500"
 ```
+
+The plugins folder comes from `FEEDBACK_PLUGINS_DIR`, or the legacy `SLOPSMITH_PLUGINS_DIR` that the desktop app sets. The bundled plugins folder can be overridden with `FEEDBACK_BUILTIN_PLUGINS_DIR`.
 
 For non-standard Host packaging where `/app/VERSION` is unavailable:
 

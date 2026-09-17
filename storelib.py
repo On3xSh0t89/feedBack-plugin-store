@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -550,6 +551,64 @@ def safe_target(plugin_root: Path, plugin_id: str) -> Path:
     return target
 
 
+def discover_builtin_plugins_dir() -> Path | None:
+    """Locate the host's bundled plugins folder (the core ``plugins`` package).
+
+    feedBack ships most official plugins inside the app itself. The host loader
+    scans that folder after the user plugins folder, so the store needs it to
+    recognise those plugins as already installed.
+    """
+    configured = os.environ.get("FEEDBACK_BUILTIN_PLUGINS_DIR", "").strip()
+    if configured:
+        return Path(configured).resolve(strict=False)
+    host = sys.modules.get("plugins")
+    candidate = getattr(host, "PLUGINS_DIR", None) if host is not None else None
+    if candidate is None or not callable(getattr(host, "load_plugins", None)):
+        return None
+    path = Path(candidate).resolve(strict=False)
+    return path if path.is_dir() else None
+
+
+def index_plugin_folders(root: Path | None) -> dict[str, Path]:
+    """Map manifest id -> folder for every plugin directly under ``root``.
+
+    Mirrors the host loader: one level deep, sorted, first folder wins. Folder
+    names are not trusted; a git clone is usually named after its repository.
+    """
+    index: dict[str, Path] = {}
+    if root is None or not root.is_dir():
+        return index
+    for child in sorted(root.iterdir()):
+        if child.name.startswith(".") or child.is_symlink() or not child.is_dir():
+            continue
+        manifest_path = child / "plugin.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        plugin_id = manifest.get("id") if isinstance(manifest, dict) else None
+        if isinstance(plugin_id, str) and plugin_id and plugin_id not in index:
+            index[plugin_id] = child
+    return index
+
+
+def builtin_copy_is_locked(folder: Path, builtin_root: Path, plugin_id: str) -> bool:
+    """True when the host always prefers this bundled copy over a user copy.
+
+    Matches the host's ``_is_bundled`` rule: directly in the bundled folder,
+    folder named after the id, and ``"bundled": true`` in the manifest.
+    """
+    if folder.parent != builtin_root or folder.name != plugin_id:
+        return False
+    try:
+        manifest = json.loads((folder / "plugin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and bool(manifest.get("bundled"))
+
+
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
     return mode == stat.S_IFLNK
@@ -640,7 +699,13 @@ def _store_id_for_url(url: str) -> str:
 
 
 class PluginStore:
-    def __init__(self, config_dir: Path, plugin_dir: Path, log: Any):
+    def __init__(
+        self,
+        config_dir: Path,
+        plugin_dir: Path,
+        log: Any,
+        builtin_root: Path | None | bool = True,
+    ):
         self.config_dir = config_dir.resolve(strict=False)
         self.plugin_dir = plugin_dir.resolve(strict=False)
         self.log = log
@@ -670,6 +735,15 @@ class PluginStore:
         self.direct_cache_dir = self.state_dir / "direct"
         self.official_cache_path = self.state_dir / "registry.yaml"
         self.official_meta_path = self.state_dir / "registry-meta.json"
+        # True = discover the host's bundled plugins folder; None/False = none.
+        if builtin_root is True:
+            builtin_root = discover_builtin_plugins_dir()
+        self.builtin_root = (
+            Path(builtin_root).resolve(strict=False) if builtin_root else None
+        )
+        if self.builtin_root == self.plugin_root:
+            self.builtin_root = None
+        self._folder_index_cache: dict[Path, tuple[int, dict[str, Path]]] = {}
         self.registry_url = discover_registry_url(self.plugin_dir)
         self.host_version = discover_host_version(self.plugin_dir)
 
@@ -1213,8 +1287,8 @@ class PluginStore:
         if plugin_id == "plugin_store":
             raise StoreError("The Plugin Store cannot be excluded.", 409)
 
-        target = safe_target(self.plugin_root, plugin_id)
-        if not target.exists():
+        _found, source = self._locate_installed(plugin_id)
+        if source is None:
             raise StoreError("Only installed plugins can be excluded.", 404)
 
         exclusions = self._exclusions()
@@ -1812,6 +1886,49 @@ class PluginStore:
 
     # ---------- catalog ----------
 
+    def _folder_index(self, root: Path | None) -> dict[str, Path]:
+        if root is None:
+            return {}
+        try:
+            stamp = root.stat().st_mtime_ns
+        except OSError:
+            return {}
+        cached = self._folder_index_cache.get(root)
+        if cached and cached[0] == stamp:
+            return cached[1]
+        index = index_plugin_folders(root)
+        self._folder_index_cache[root] = (stamp, index)
+        return index
+
+    def _locate_installed(self, plugin_id: str) -> tuple[Path, str | None]:
+        """Find where a plugin is installed, however it got there.
+
+        Returns (folder, source) where source is:
+        - "store": ``plugin_root/<id>``, the folder this store manages;
+        - "manual": another folder in plugin_root whose manifest has this id
+          (for example a git clone named after its repository);
+        - "builtin": the copy bundled with feedBack;
+        - None: not installed (folder is where an install would go).
+        """
+        target = safe_target(self.plugin_root, plugin_id)
+        if target.exists() or target.is_symlink():
+            return target, "store"
+        manual = self._folder_index(self.plugin_root).get(plugin_id)
+        if manual is not None:
+            return manual, "manual"
+        builtin = self._folder_index(self.builtin_root).get(plugin_id)
+        if builtin is not None:
+            return builtin, "builtin"
+        return target, None
+
+    def _builtin_locked(self, plugin_id: str) -> bool:
+        builtin = self._folder_index(self.builtin_root).get(plugin_id)
+        return bool(
+            builtin is not None
+            and self.builtin_root is not None
+            and builtin_copy_is_locked(builtin, self.builtin_root, plugin_id)
+        )
+
     def _installed_state(
         self,
         entry: dict[str, Any],
@@ -1820,7 +1937,7 @@ class PluginStore:
         third_party: bool,
         compatibility: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        target = safe_target(self.plugin_root, entry["id"])
+        target, source = self._locate_installed(entry["id"])
         managed = self._managed().get(entry["id"])
         managed_by_store = bool(
             isinstance(managed, dict)
@@ -1850,6 +1967,8 @@ class PluginStore:
             "rollback_version": None,
             "rollback_created_at": None,
             "excluded": entry["id"] in self._exclusions(),
+            "install_source": source,
+            "install_path": str(target) if source else None,
         }
 
         if compatibility:
@@ -1892,7 +2011,31 @@ class PluginStore:
                 )
 
                 comparison = compare_versions(installed_version, entry["version"])
-                if third_party and not managed_by_store:
+                state["catalog_newer"] = comparison < 0
+                if source == "manual":
+                    # Installed by hand (usually a git clone) under another
+                    # folder name. Replacing it would leave two copies with the
+                    # same id, and removing it would delete the user's checkout.
+                    state["status"] = "installed_external"
+                    state["can_update"] = False
+                    state["can_remove"] = False
+                elif source == "builtin":
+                    # Ships with feedBack. It cannot be removed from here, but a
+                    # newer catalog version can be installed into the user
+                    # plugins folder, which the host loads first, unless the
+                    # host always keeps its bundled copy.
+                    locked = self._builtin_locked(entry["id"])
+                    state["builtin_locked"] = locked
+                    state["can_remove"] = False
+                    if comparison < 0 and not locked and not third_party:
+                        state["status"] = "update_available" if state["compatible"] else "incompatible"
+                        state["update_available"] = True
+                        state["can_update"] = bool(state["compatible"])
+                    elif comparison > 0:
+                        state["status"] = "local_newer"
+                    else:
+                        state["status"] = "installed"
+                elif third_party and not managed_by_store:
                     state["status"] = "installed_external"
                     state["can_update"] = False
                     state["can_remove"] = False
@@ -1912,9 +2055,16 @@ class PluginStore:
                 state["status"] = "broken"
                 state["error"] = exc.message
                 state["can_install"] = False
-                state["can_update"] = bool(state["compatible"] and (not third_party or managed_by_store))
-                state["can_remove"] = bool(not third_party or managed_by_store)
+                state["can_update"] = bool(
+                    state["compatible"]
+                    and source == "store"
+                    and (not third_party or managed_by_store)
+                )
+                state["can_remove"] = bool(
+                    source == "store" and (not third_party or managed_by_store)
+                )
 
+        if source == "store":
             rollback = self._rollback_info(entry["id"], state.get("installed_version"))
             if rollback:
                 state["rollback_available"] = True
@@ -2179,6 +2329,24 @@ class PluginStore:
             )
 
         target = safe_target(self.plugin_root, plugin_id)
+        if not target.exists() and not target.is_symlink():
+            found, source = self._locate_installed(plugin_id)
+            if source == "manual":
+                raise StoreError(
+                    f"Plugin is already installed manually at {found}. "
+                    "Update or remove that copy yourself.",
+                    409,
+                )
+            if source == "builtin":
+                if self._builtin_locked(plugin_id):
+                    raise StoreError(
+                        "This plugin is bundled with feedBack and the host always "
+                        "uses the bundled copy.",
+                        409,
+                    )
+                # Updating a bundled plugin = a fresh install into the user
+                # plugins folder, which the host loads ahead of the bundled one.
+                replace = False
         if target.exists() and not replace:
             raise StoreError("Plugin is already installed.", 409)
         if not target.exists() and replace:
@@ -2697,6 +2865,14 @@ class PluginStore:
         _entry, _config, third_party = self._entry(plugin_id, store_id)
         target = safe_target(self.plugin_root, plugin_id)
         if not target.exists():
+            found, source = self._locate_installed(plugin_id)
+            if source == "builtin":
+                raise StoreError("This plugin is bundled with feedBack and cannot be removed here.", 409)
+            if source == "manual":
+                raise StoreError(
+                    f"This plugin was installed manually at {found}; remove that folder yourself.",
+                    409,
+                )
             raise StoreError("Plugin is not installed.", 404)
         if target.is_symlink():
             raise StoreError("Refusing to remove a symlinked plugin directory.", 409)

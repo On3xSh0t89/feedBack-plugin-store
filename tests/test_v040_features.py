@@ -45,7 +45,7 @@ def build_store(tmp_path, monkeypatch):
 
 def test_manifest_is_v040():
     manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.4.0"
+    assert manifest["version"] == "0.4.2"
 
 
 def test_tag_archive_uses_tags_namespace():

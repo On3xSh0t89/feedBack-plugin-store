@@ -19,3 +19,12 @@ def test_instance_endpoint_exists_for_restart_detection():
     assert 'api("/restart", { method: "POST" })' in screen
     assert "waitForNewInstance" in screen
     assert "window.location.reload()" in screen
+
+
+
+def test_restart_is_environment_aware():
+    routes = (ROOT / "routes.py").read_text(encoding="utf-8")
+    assert "FEEDBACK_PLUGIN_STORE_RESTART_MODE" in routes
+    assert "def _detect_restart_mode(" in routes
+    assert '@app.get(f"{API_PREFIX}/restart-info")' in routes
+    assert '"manual_required": True' in routes

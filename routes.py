@@ -7,6 +7,7 @@ plugin specification. All setup happens inside setup().
 from __future__ import annotations
 
 import os
+import platform
 import signal
 import threading
 import uuid
@@ -17,6 +18,105 @@ from fastapi import Body, FastAPI, Header, HTTPException, Query
 
 PLUGIN_ID = "plugin_store"
 API_PREFIX = f"/api/plugins/{PLUGIN_ID}"
+
+
+
+RESTART_MODE_ENV = "FEEDBACK_PLUGIN_STORE_RESTART_MODE"
+VALID_RESTART_MODES = {"auto", "container", "desktop", "manual"}
+
+
+def _read_linux_cgroup() -> str:
+    chunks: list[str] = []
+    for candidate in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        try:
+            chunks.append(Path(candidate).read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            pass
+    return "\n".join(chunks).lower()
+
+
+def _detect_restart_mode(
+    *,
+    environ: dict[str, str] | None = None,
+    system_name: str | None = None,
+    dockerenv_exists: bool | None = None,
+    cgroup_text: str | None = None,
+) -> dict:
+    """Return the safest restart strategy we can infer.
+
+    `container` and `desktop` both use process termination, but for different
+    supervisors: Docker/systemd-style container supervision vs the native
+    feedBack Desktop shell. `manual` never terminates the process.
+    """
+    env = dict(os.environ if environ is None else environ)
+    requested = str(env.get(RESTART_MODE_ENV, "auto") or "auto").strip().lower()
+    if requested not in VALID_RESTART_MODES:
+        requested = "auto"
+
+    system = system_name or platform.system() or "Unknown"
+
+    if requested != "auto":
+        automatic = requested in {"container", "desktop"}
+        return {
+            "mode": requested,
+            "automatic": automatic,
+            "platform": system,
+            "reason": f"Explicit {RESTART_MODE_ENV} override.",
+        }
+
+    if dockerenv_exists is None:
+        dockerenv_exists = Path("/.dockerenv").exists()
+    if cgroup_text is None:
+        cgroup_text = _read_linux_cgroup()
+
+    container_tokens = ("docker", "containerd", "kubepods", "podman", "lxc")
+    container_env = str(env.get("container", "")).strip().lower()
+
+    if (
+        dockerenv_exists
+        or any(token in cgroup_text for token in container_tokens)
+        or container_env in {"docker", "podman", "lxc", "containerd"}
+    ):
+        return {
+            "mode": "container",
+            "automatic": True,
+            "platform": system,
+            "reason": "Container runtime detected.",
+        }
+
+    # A native Windows/macOS backend is expected to be owned by feedBack
+    # Desktop. Linux Desktop ships as an AppImage, which normally propagates
+    # APPIMAGE/APPDIR to child processes.
+    if system in {"Windows", "Darwin"}:
+        return {
+            "mode": "desktop",
+            "automatic": True,
+            "platform": system,
+            "reason": f"Native {system} host detected.",
+        }
+
+    linux_desktop_hints = (
+        "APPIMAGE",
+        "APPDIR",
+        "FEEDBACK_DESKTOP",
+        "FEEDBACK_DESKTOP_APP",
+        "SLOPSMITH_DESKTOP",
+    )
+    if system == "Linux" and any(str(env.get(key, "")).strip() for key in linux_desktop_hints):
+        return {
+            "mode": "desktop",
+            "automatic": True,
+            "platform": system,
+            "reason": "Linux desktop/AppImage environment detected.",
+        }
+
+    return {
+        "mode": "manual",
+        "automatic": False,
+        "platform": system,
+        "reason": "No container or native desktop supervisor could be identified safely.",
+    }
+
 
 
 def setup(app: FastAPI, context: dict) -> None:
@@ -50,31 +150,69 @@ def setup(app: FastAPI, context: dict) -> None:
 
     instance_id = uuid.uuid4().hex
 
+    def restart_info() -> dict:
+        return _detect_restart_mode()
+
     @app.get(f"{API_PREFIX}/instance")
     def get_instance():
-        return {"instance_id": instance_id}
+        return {
+            "instance_id": instance_id,
+            "restart": restart_info(),
+        }
 
-    def schedule_restart() -> None:
+    @app.get(f"{API_PREFIX}/restart-info")
+    def get_restart_info():
+        return restart_info()
+
+    def schedule_restart() -> dict:
+        info = restart_info()
+        if not info["automatic"]:
+            return {
+                **info,
+                "restarting": False,
+                "manual_required": True,
+            }
+
         def terminate_process():
-            log.info(
-                "plugin_store_restart_requested",
-                extra={"pid": os.getpid(), "instance_id": instance_id},
-            )
+            try:
+                log.info(
+                    "plugin_store_restart_requested",
+                    extra={
+                        "pid": os.getpid(),
+                        "instance_id": instance_id,
+                        "restart_mode": info["mode"],
+                        "platform_name": info["platform"],
+                    },
+                )
+            except Exception:
+                # Restart must not depend on a particular logging adapter.
+                pass
+
+            # Container mode relies on the configured container supervisor.
+            # Desktop mode relies on feedBack Desktop supervising its backend.
             os.kill(os.getpid(), signal.SIGTERM)
 
-        # Let the HTTP response reach the browser before terminating feedBack.
-        # Docker's restart policy/supervisor is responsible for bringing it back.
+        # Let the HTTP response reach the frontend before terminating backend.
         timer = threading.Timer(1.0, terminate_process)
         timer.daemon = True
         timer.start()
+        return {
+            **info,
+            "restarting": True,
+            "manual_required": False,
+        }
 
     @app.post(f"{API_PREFIX}/restart")
     def restart_feedback(
         x_feedback_plugin_store: str | None = Header(default=None),
     ):
         require_mutation_header(x_feedback_plugin_store)
-        schedule_restart()
-        return {"ok": True, "restarting": True, "instance_id": instance_id}
+        restart = schedule_restart()
+        return {
+            "ok": True,
+            "instance_id": instance_id,
+            **restart,
+        }
 
     @app.get(f"{API_PREFIX}/self-update")
     def get_self_update(refresh: bool = Query(default=False)):
@@ -92,11 +230,11 @@ def setup(app: FastAPI, context: dict) -> None:
             result = store.install_self_update()
         except storelib.StoreError as exc:
             fail(exc)
-        schedule_restart()
+        restart = schedule_restart()
         return {
             **result,
-            "restarting": True,
             "instance_id": instance_id,
+            **restart,
         }
 
     @app.get(f"{API_PREFIX}/catalog")

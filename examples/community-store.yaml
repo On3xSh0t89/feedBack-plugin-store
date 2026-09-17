@@ -1,12 +1,14 @@
-# Demo third-party feedBack Plugin Store
-# This catalog is intentionally empty. It exists to test adding/removing
-# third-party stores without introducing duplicate official plugin IDs.
-
 schema: 1
 
 store:
-  name: Plugin Store Demo
-  description: Test catalog for validating third-party store add/remove behavior.
-  homepage: https://github.com/irnutsmurt/feedBack-plugin-store
+  name: Example Community Store
+  description: Example third-party feedBack plugin catalog.
+  homepage: https://github.com/example/community-store
 
-plugins: []
+plugins:
+  - id: example_plugin
+    name: Example Plugin
+    description: Example third-party plugin entry.
+    version: 1.0.0
+    repository: https://github.com/example/feedBack-plugin-example
+    ref: main

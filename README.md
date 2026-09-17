@@ -201,17 +201,41 @@ This does **not** make third-party plugin code safe. It provides provenance, val
 
 ## In-app restart
 
-After an install, update, or removal, Plugin Store shows **Restart feedBack**.
+After an install, update, rollback, or removal, Plugin Store shows
+**Restart feedBack**.
 
-The restart endpoint does not require the Docker socket. It returns success to the browser, waits one second, then sends `SIGTERM` to the running feedBack Python process. The browser polls a per-process instance id and reloads only after a new feedBack process is serving requests.
+Plugin Store now detects the restart environment:
 
-For Docker this requires a restart policy such as:
+- **Container** — sends `SIGTERM` to the feedBack backend and relies on the
+  container supervisor/restart policy to bring it back.
+- **Desktop Windows/macOS** — sends `SIGTERM` to the backend and relies on
+  feedBack Desktop to supervise and respawn its backend.
+- **Desktop Linux/AppImage** — detected from AppImage/desktop environment
+  hints and uses the same supervised-backend strategy.
+- **Unknown/bare-metal** — automatic restart is disabled and the UI tells the
+  user to quit/reopen feedBack manually.
+
+The browser polls a per-process instance id and reloads only after a new
+feedBack backend is serving requests. If a desktop supervisor does not bring
+the backend back within 60 seconds, Plugin Store falls back to a clear manual
+restart instruction.
+
+For Docker this still requires a restart policy such as:
 
 ```yaml
 restart: unless-stopped
 ```
 
-If feedBack is run without Docker or another supervisor/restart policy, using the restart button will stop feedBack and it will remain stopped.
+Detection can be overridden explicitly:
+
+```yaml
+environment:
+  FEEDBACK_PLUGIN_STORE_RESTART_MODE: auto
+```
+
+Accepted values are `auto`, `container`, `desktop`, and `manual`. `manual` is
+the safe override for unusual/native development setups where terminating the
+backend should never be attempted automatically.
 
 ## Install safety
 
@@ -301,3 +325,5 @@ reviewing [masc0t/slopsmith-update-manager](https://github.com/masc0t/slopsmith-
 No source code from that project is included here.
 
 - Fixes third-party store adds returning HTTP 500 after successful persistence due to Python logging's reserved `name` field.
+
+- Adds cross-platform restart-mode detection for Docker, native Windows/macOS, Linux AppImage, and manual fallback.

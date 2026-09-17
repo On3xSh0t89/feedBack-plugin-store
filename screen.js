@@ -201,12 +201,49 @@
     return payload;
   }
 
+  function restartModeLabel(info) {
+    if (!info) return "unknown";
+    if (info.mode === "container") return "container";
+    if (info.mode === "desktop") return "desktop";
+    if (info.mode === "manual") return "manual";
+    return info.mode || "unknown";
+  }
+
+  function restartFailureMessage(info) {
+    if (info && info.mode === "desktop") {
+      return "feedBack Desktop did not restart its backend within 60 seconds. Quit feedBack completely and reopen it.";
+    }
+    if (info && info.mode === "container") {
+      return "feedBack did not return within 60 seconds. Check the container restart policy and logs.";
+    }
+    return "Automatic restart is unavailable on this installation. Quit feedBack completely and reopen it.";
+  }
+
+  function manualRestartMessage(prefix = "Changes installed.") {
+    return `${prefix} Automatic restart is unavailable on this installation. Quit feedBack completely and reopen it.`;
+  }
+
+  async function loadRestartInfo() {
+    try {
+      state.restartInfo = await api("/restart-info");
+    } catch (_) {
+      state.restartInfo = null;
+    }
+    syncRestartButton();
+  }
+
   function syncRestartButton() {
     const { restart } = elements();
     if (!restart) return;
     restart.hidden = !state.restartRequired;
     restart.disabled = state.restarting;
-    restart.textContent = state.restarting ? "Restarting…" : "Restart feedBack";
+    if (state.restarting) {
+      restart.textContent = "Restarting…";
+    } else if (state.restartInfo && state.restartInfo.automatic === false) {
+      restart.textContent = "Restart feedBack manually";
+    } else {
+      restart.textContent = "Restart feedBack";
+    }
   }
 
   function sleep(ms) {
@@ -310,11 +347,31 @@
 
     try {
       const result = await api("/self-update/install", { method: "POST" });
+      state.restartInfo = result;
+
+      if (result.manual_required || result.restarting === false) {
+        state.restartRequired = true;
+        state.restarting = false;
+        state.selfUpdating = false;
+        syncRestartButton();
+        if (updateLink) {
+          updateLink.disabled = true;
+          updateLink.textContent = "Update Installed";
+        }
+        setBanner(
+          manualRestartMessage(
+            `Plugin Store ${result.version || "update"} installed.`
+          ),
+          "warning"
+        );
+        return;
+      }
+
       state.restarting = true;
       syncRestartButton();
       if (updateLink) updateLink.textContent = "Restarting…";
       setBanner(
-        `Plugin Store ${result.version || "update"} installed. Restarting feedBack…`,
+        `Plugin Store ${result.version || "update"} installed. Restarting feedBack (${restartModeLabel(result)})…`,
         "success"
       );
 
@@ -326,10 +383,7 @@
         return;
       }
 
-      setBanner(
-        "The Plugin Store was updated, but feedBack did not return within 60 seconds. Check the container restart policy and logs.",
-        "error"
-      );
+      setBanner(restartFailureMessage(result), "error");
     } catch (error) {
       setBanner(error.message || String(error), "error");
       state.selfUpdating = false;
@@ -344,8 +398,17 @@
 
   async function restartFeedBack(confirmRestart = true) {
     if (state.restarting) return;
+
+    if (state.restartInfo && state.restartInfo.automatic === false) {
+      setBanner(
+        manualRestartMessage("A feedBack restart is required."),
+        "warning"
+      );
+      return;
+    }
+
     if (confirmRestart && !window.confirm(
-      "Restart feedBack now? The page will wait for the container to return and then reload automatically."
+      "Restart feedBack now? The page will wait for it to return and then reload automatically."
     )) return;
 
     state.restarting = true;
@@ -354,6 +417,16 @@
 
     try {
       const result = await api("/restart", { method: "POST" });
+      state.restartInfo = result;
+
+      if (result.manual_required || result.restarting === false) {
+        setBanner(
+          manualRestartMessage("A feedBack restart is required."),
+          "warning"
+        );
+        return;
+      }
+
       const restarted = await waitForNewInstance(result.instance_id);
       if (restarted) {
         setBanner("feedBack is back. Reloading…", "success");
@@ -361,10 +434,7 @@
         window.location.reload();
         return;
       }
-      setBanner(
-        "feedBack did not return within 60 seconds. Check the container restart policy and logs.",
-        "error"
-      );
+      setBanner(restartFailureMessage(result), "error");
     } catch (error) {
       setBanner(error.message || String(error), "error");
     } finally {
@@ -1536,6 +1606,7 @@
 
   bind();
   ensureSidebarEntry();
+  loadRestartInfo();
   checkSelfUpdate(false);
   loadCatalog(false);
 

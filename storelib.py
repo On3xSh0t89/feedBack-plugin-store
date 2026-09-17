@@ -645,7 +645,12 @@ class PluginStore:
         self.plugin_dir = plugin_dir.resolve(strict=False)
         self.log = log
 
-        configured_root = os.environ.get("FEEDBACK_PLUGINS_DIR", "").strip()
+        # The desktop app still exports the legacy SLOPSMITH_PLUGINS_DIR name
+        # (the host reads both via getenv_compat), so honour it as a fallback.
+        configured_root = (
+            os.environ.get("FEEDBACK_PLUGINS_DIR", "").strip()
+            or os.environ.get("SLOPSMITH_PLUGINS_DIR", "").strip()
+        )
         if configured_root:
             self.plugin_root = Path(configured_root).resolve(strict=False)
         else:

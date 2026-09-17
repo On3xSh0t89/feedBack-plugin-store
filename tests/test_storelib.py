@@ -136,6 +136,44 @@ def test_plugin_root_may_live_outside_config(tmp_path, monkeypatch):
     assert store.state_dir == (config_dir / "plugin_store").resolve()
 
 
+def _make_store(tmp_path):
+    config_dir = tmp_path / "config"
+    plugin_dir = tmp_path / "plugin_store"
+    config_dir.mkdir()
+    plugin_dir.mkdir()
+    (plugin_dir / "registry.yaml").write_text("schema: 1\nplugins: []\n", encoding="utf-8")
+
+    class Log:
+        def info(self, *args, **kwargs): pass
+        def error(self, *args, **kwargs): pass
+
+    return config_dir, storelib.PluginStore(config_dir=config_dir, plugin_dir=plugin_dir, log=Log())
+
+
+def test_plugin_root_honours_legacy_slopsmith_env(tmp_path, monkeypatch):
+    # The feedBack desktop app exports only SLOPSMITH_PLUGINS_DIR.
+    plugin_root = tmp_path / "desktop-plugins"
+    monkeypatch.delenv("FEEDBACK_PLUGINS_DIR", raising=False)
+    monkeypatch.setenv("SLOPSMITH_PLUGINS_DIR", str(plugin_root))
+    _, store = _make_store(tmp_path)
+    assert store.plugin_root == plugin_root.resolve()
+
+
+def test_feedback_plugins_dir_wins_over_legacy_env(tmp_path, monkeypatch):
+    preferred = tmp_path / "preferred"
+    monkeypatch.setenv("FEEDBACK_PLUGINS_DIR", str(preferred))
+    monkeypatch.setenv("SLOPSMITH_PLUGINS_DIR", str(tmp_path / "legacy"))
+    _, store = _make_store(tmp_path)
+    assert store.plugin_root == preferred.resolve()
+
+
+def test_plugin_root_defaults_under_config_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("FEEDBACK_PLUGINS_DIR", raising=False)
+    monkeypatch.delenv("SLOPSMITH_PLUGINS_DIR", raising=False)
+    config_dir, store = _make_store(tmp_path)
+    assert store.plugin_root == (config_dir / "user-plugins").resolve()
+
+
 def test_registry_url_falls_back_to_manifest_homepage(tmp_path):
     (tmp_path / "plugin.json").write_text(
         json.dumps({"homepage": "https://github.com/irnutsmurt/feedBack-plugin-store"}),
